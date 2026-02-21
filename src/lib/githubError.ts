@@ -81,6 +81,15 @@ export function toUserMessage(error: unknown, options: UserMessageOptions = {}):
       return 'Repo not found or private. Check name and token permissions.'
     }
 
+    const unprocessableMessage = `${error.message} ${error.details.join(' ')}`.toLowerCase()
+    if (
+      error.status === 422 &&
+      (unprocessableMessage.includes('fewer than 10000 commits') ||
+        unprocessableMessage.includes('fewer than 10,000 commits'))
+    ) {
+      return 'GitHub stats APIs do not support repositories with 10,000+ commits. Showing partial data where possible.'
+    }
+
     if (error.status === 202) {
       return 'GitHub is still computing repository statistics. Please retry in a few seconds.'
     }

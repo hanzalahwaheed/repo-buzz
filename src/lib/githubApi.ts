@@ -20,6 +20,10 @@ const GITHUB_API_VERSION = '2022-11-28'
 const GRAPHQL_CONNECTION_PAGE_SIZE = 100
 const STATS_RETRY_MAX_ATTEMPTS = 5
 const STATS_RETRY_DELAY_MS = 2200
+const RECENT_COMMIT_FALLBACK_DAYS = 30
+const RECENT_COMMIT_FALLBACK_PER_PAGE = 100
+const RECENT_COMMIT_FALLBACK_MAX_PAGES = 10
+const DAY_MS = 24 * 60 * 60 * 1000
 
 const etagCache = new Map<string, { etag: string; data: unknown }>()
 
@@ -209,6 +213,32 @@ interface BatchRepositoryOptions {
   concurrency?: number
 }
 
+type StatsUnavailableReason = 'commit_limit'
+
+interface StatsEndpointResult<T> {
+  data: T
+  pending: boolean
+  unavailableReason?: StatsUnavailableReason
+}
+
+interface RecentCommitListItem {
+  commit: {
+    author: {
+      date: string | null
+    } | null
+  }
+  author: {
+    login: string
+    type: string
+  } | null
+}
+
+interface RecentCommitFallback {
+  commitActivity: CommitActivityWeek[]
+  contributors: ContributorStat[]
+  truncated: boolean
+}
+
 function parseRateLimitFromHeaders(headers: Headers): Omit<RateLimitSnapshot, 'source'> | null {
   const limit = Number(headers.get('x-ratelimit-limit') ?? '')
   const remaining = Number(headers.get('x-ratelimit-remaining') ?? '')
@@ -261,6 +291,25 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
     signal?.addEventListener('abort', onAbort)
   })
+}
+
+function toUtcWeekStartUnixSeconds(dateInput: string): number {
+  const date = new Date(dateInput)
+  const normalized = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  )
+  const day = normalized.getUTCDay()
+  normalized.setUTCDate(normalized.getUTCDate() - day)
+  normalized.setUTCHours(0, 0, 0, 0)
+  return Math.floor(normalized.getTime() / 1000)
+}
+
+function isCommitLimitError(error: GitHubApiError): boolean {
+  const message = `${error.message} ${error.details.join(' ')}`.toLowerCase()
+  return (
+    message.includes('fewer than 10000 commits') ||
+    message.includes('fewer than 10,000 commits')
+  )
 }
 
 const ORG_REPOSITORIES_QUERY = `
@@ -850,7 +899,7 @@ export class GitHubApiClient {
   private async fetchRepositoryStats(
     owner: string,
     repo: string,
-    signal?: AbortSignal,
+  signal?: AbortSignal,
   ): Promise<RepositoryStatsBundle> {
     const [participation, commitActivity, contributors, codeFrequency] =
       await Promise.all([
@@ -887,10 +936,63 @@ export class GitHubApiClient {
         ),
       ])
 
+    let commitActivityData = commitActivity.data
+    let contributorsData = contributors.data
+    const fallbackMessages: string[] = []
+
+    const hasCommitLimitUnavailable = [
+      participation,
+      commitActivity,
+      contributors,
+      codeFrequency,
+    ].some((result) => result.unavailableReason === 'commit_limit')
+
+    if (hasCommitLimitUnavailable) {
+      try {
+        const recentCommitFallback = await this.fetchRecentCommitFallback(
+          owner,
+          repo,
+          signal,
+        )
+
+        if (commitActivity.unavailableReason === 'commit_limit') {
+          commitActivityData = recentCommitFallback.commitActivity
+        }
+
+        if (contributors.unavailableReason === 'commit_limit') {
+          contributorsData = recentCommitFallback.contributors
+        }
+
+        const truncatedSuffix = recentCommitFallback.truncated
+          ? ` (capped at ${
+              RECENT_COMMIT_FALLBACK_PER_PAGE * RECENT_COMMIT_FALLBACK_MAX_PAGES
+            } commits)`
+          : ''
+        fallbackMessages.push(
+          `GitHub stats endpoints are unavailable for repositories with 10,000+ commits. Using last ${RECENT_COMMIT_FALLBACK_DAYS} days of commit history for commit/contributor metrics${truncatedSuffix}.`,
+        )
+      } catch {
+        fallbackMessages.push(
+          'GitHub stats endpoints are unavailable for this repository, and 30-day commit fallback data could not be loaded.',
+        )
+      }
+    }
+
+    const unavailableEndpoints: string[] = [
+      ...(participation.unavailableReason ? ['participation'] : []),
+      ...(codeFrequency.unavailableReason ? ['code_frequency'] : []),
+      ...(commitActivity.unavailableReason && commitActivityData.length === 0
+        ? ['commit_activity']
+        : []),
+      ...(contributors.unavailableReason && contributorsData.length === 0
+        ? ['contributors']
+        : []),
+    ]
+
     return {
       participation: participation.data,
-      commitActivity: commitActivity.data,
-      contributors: contributors.data,
+      commitActivity: commitActivityData,
+      contributors: contributorsData,
       codeFrequency: codeFrequency.data,
       pendingEndpoints: [
         ...(participation.pending ? ['participation'] : []),
@@ -898,6 +1000,8 @@ export class GitHubApiClient {
         ...(contributors.pending ? ['contributors'] : []),
         ...(codeFrequency.pending ? ['code_frequency'] : []),
       ],
+      unavailableEndpoints,
+      fallbackMessages,
     }
   }
 
@@ -907,16 +1011,33 @@ export class GitHubApiClient {
     endpoint: string,
     fallback: T,
     signal?: AbortSignal,
-  ): Promise<{ data: T; pending: boolean }> {
+  ): Promise<StatsEndpointResult<T>> {
     const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/stats/${endpoint}`
 
     for (let attempt = 1; attempt <= STATS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-      const response = await this.restRequest<T>(path, {
-        signal,
-        useEtag: true,
-        cacheKey: path,
-        allow202: true,
-      })
+      let response: RestResponse<T>
+      try {
+        response = await this.restRequest<T>(path, {
+          signal,
+          useEtag: true,
+          cacheKey: path,
+          allow202: true,
+        })
+      } catch (error) {
+        if (
+          error instanceof GitHubApiError &&
+          error.status === 422 &&
+          isCommitLimitError(error)
+        ) {
+          return {
+            data: fallback,
+            pending: false,
+            unavailableReason: 'commit_limit',
+          }
+        }
+
+        throw error
+      }
 
       if (response.status === 202) {
         if (attempt === STATS_RETRY_MAX_ATTEMPTS) {
@@ -946,6 +1067,111 @@ export class GitHubApiClient {
     return {
       data: fallback,
       pending: true,
+    }
+  }
+
+  private async fetchRecentCommitFallback(
+    owner: string,
+    repo: string,
+    signal?: AbortSignal,
+  ): Promise<RecentCommitFallback> {
+    const sinceIso = new Date(
+      Date.now() - RECENT_COMMIT_FALLBACK_DAYS * DAY_MS,
+    ).toISOString()
+    const commits: RecentCommitListItem[] = []
+    let truncated = false
+
+    for (let page = 1; page <= RECENT_COMMIT_FALLBACK_MAX_PAGES; page += 1) {
+      const path =
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits` +
+        `?since=${encodeURIComponent(sinceIso)}` +
+        `&per_page=${RECENT_COMMIT_FALLBACK_PER_PAGE}` +
+        `&page=${page}`
+
+      const response = await this.restRequest<RecentCommitListItem[]>(path, {
+        signal,
+        useEtag: page === 1,
+        cacheKey: path,
+      })
+
+      const pageItems = response.data ?? []
+      commits.push(...pageItems)
+
+      if (pageItems.length < RECENT_COMMIT_FALLBACK_PER_PAGE) {
+        break
+      }
+
+      if (page === RECENT_COMMIT_FALLBACK_MAX_PAGES) {
+        truncated = true
+      }
+    }
+
+    const commitsByWeek = new Map<number, number>()
+    const contributorsByKey = new Map<
+      string,
+      {
+        author: GitHubActor | null
+        total: number
+        weeks: Map<number, number>
+      }
+    >()
+
+    for (const item of commits) {
+      const authoredAt = item.commit.author?.date
+      if (!authoredAt) {
+        continue
+      }
+
+      const weekStart = toUtcWeekStartUnixSeconds(authoredAt)
+      commitsByWeek.set(weekStart, (commitsByWeek.get(weekStart) ?? 0) + 1)
+
+      const key = item.author?.login ?? '__unknown__'
+      const existing = contributorsByKey.get(key)
+      if (!existing) {
+        contributorsByKey.set(key, {
+          author: item.author
+            ? {
+                login: item.author.login,
+                type: item.author.type ?? 'User',
+              }
+            : null,
+          total: 1,
+          weeks: new Map<number, number>([[weekStart, 1]]),
+        })
+        continue
+      }
+
+      existing.total += 1
+      existing.weeks.set(weekStart, (existing.weeks.get(weekStart) ?? 0) + 1)
+    }
+
+    const commitActivity: CommitActivityWeek[] = [...commitsByWeek.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([week, total]) => ({
+        week,
+        total,
+        days: [0, 0, 0, 0, 0, 0, 0],
+      }))
+
+    const contributors: ContributorStat[] = [...contributorsByKey.values()]
+      .map((entry) => ({
+        total: entry.total,
+        author: entry.author,
+        weeks: [...entry.weeks.entries()]
+          .sort(([left], [right]) => left - right)
+          .map(([w, c]) => ({
+            w,
+            a: 0,
+            d: 0,
+            c,
+          })),
+      }))
+      .sort((left, right) => right.total - left.total)
+
+    return {
+      commitActivity,
+      contributors,
+      truncated,
     }
   }
 }

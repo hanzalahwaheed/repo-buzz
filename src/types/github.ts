@@ -96,6 +96,8 @@ export interface RepositoryStatsBundle {
   contributors: ContributorStat[]
   codeFrequency: Array<[number, number, number]>
   pendingEndpoints: string[]
+  unavailableEndpoints?: string[]
+  fallbackMessages?: string[]
 }
 
 export interface RepositoryBundle {

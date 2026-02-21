@@ -479,6 +479,18 @@ export function computeRepoAnalytics(
     )
   }
 
+  const unavailableEndpoints = bundle.stats.unavailableEndpoints ?? []
+  if (unavailableEndpoints.length > 0) {
+    warnings.push(
+      `Some GitHub stats endpoints are unavailable for this repository: ${unavailableEndpoints.join(', ')}.`,
+    )
+  }
+
+  const fallbackMessages = bundle.stats.fallbackMessages ?? []
+  for (const message of fallbackMessages) {
+    warnings.push(message)
+  }
+
   if (bundle.snapshot.metadata.isArchived) {
     warnings.push('This repository is archived. Low recent activity is expected.')
   }
