@@ -3,6 +3,7 @@ import type {
   GitHubPullRequestNode,
   HealthComponent,
   MonthlyContributorTrend,
+  RecentContributorActivity,
   RepoAnalytics,
   RepositoryBundle,
 } from '../types/github'
@@ -207,6 +208,113 @@ function buildHealthScore(components: HealthComponent[]): {
   }
 }
 
+function buildTopContributorsLast3Weeks(
+  owner: string,
+  repo: string,
+  issues: GitHubIssueNode[],
+  pullRequests: GitHubPullRequestNode[],
+): RecentContributorActivity[] {
+  const cutoff21d = Date.now() - 21 * DAY_MS
+  const statsByAuthor = new Map<
+    string,
+    {
+      issuesOpenedLast3Weeks: number
+      prsOpenedLast3Weeks: number
+      prsMergedLast3Weeks: number
+    }
+  >()
+
+  const ensure = (login: string) => {
+    const existing = statsByAuthor.get(login)
+    if (existing) {
+      return existing
+    }
+
+    const created = {
+      issuesOpenedLast3Weeks: 0,
+      prsOpenedLast3Weeks: 0,
+      prsMergedLast3Weeks: 0,
+    }
+    statsByAuthor.set(login, created)
+    return created
+  }
+
+  for (const issue of issues) {
+    if (!issue.author?.login) {
+      continue
+    }
+
+    if (new Date(issue.createdAt).getTime() < cutoff21d) {
+      continue
+    }
+
+    ensure(issue.author.login).issuesOpenedLast3Weeks += 1
+  }
+
+  for (const pullRequest of pullRequests) {
+    if (!pullRequest.author?.login) {
+      continue
+    }
+
+    const stats = ensure(pullRequest.author.login)
+
+    if (new Date(pullRequest.createdAt).getTime() >= cutoff21d) {
+      stats.prsOpenedLast3Weeks += 1
+    }
+
+    if (
+      pullRequest.mergedAt &&
+      new Date(pullRequest.mergedAt).getTime() >= cutoff21d
+    ) {
+      stats.prsMergedLast3Weeks += 1
+    }
+  }
+
+  const encodedOwnerRepo = `${owner}/${repo}`
+
+  return [...statsByAuthor.entries()]
+    .map(([login, stats]) => {
+      const issuesQuery = `is:issue author:${login}`
+      const prsOpenedQuery = `is:pr author:${login}`
+      const prsMergedQuery = `is:pr is:merged author:${login}`
+      return {
+        login,
+        activityUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(`author:${login}`)}`,
+        issuesUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(issuesQuery)}`,
+        prsOpenedUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(prsOpenedQuery)}`,
+        prsMergedUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(prsMergedQuery)}`,
+        issuesOpenedLast3Weeks: stats.issuesOpenedLast3Weeks,
+        prsOpenedLast3Weeks: stats.prsOpenedLast3Weeks,
+        prsMergedLast3Weeks: stats.prsMergedLast3Weeks,
+        combinedActivity:
+          stats.issuesOpenedLast3Weeks +
+          stats.prsOpenedLast3Weeks +
+          stats.prsMergedLast3Weeks,
+      }
+    })
+    .filter((entry) => entry.combinedActivity > 0)
+    .sort((left, right) => {
+      if (right.combinedActivity !== left.combinedActivity) {
+        return right.combinedActivity - left.combinedActivity
+      }
+
+      if (right.prsMergedLast3Weeks !== left.prsMergedLast3Weeks) {
+        return right.prsMergedLast3Weeks - left.prsMergedLast3Weeks
+      }
+
+      if (right.prsOpenedLast3Weeks !== left.prsOpenedLast3Weeks) {
+        return right.prsOpenedLast3Weeks - left.prsOpenedLast3Weeks
+      }
+
+      if (right.issuesOpenedLast3Weeks !== left.issuesOpenedLast3Weeks) {
+        return right.issuesOpenedLast3Weeks - left.issuesOpenedLast3Weeks
+      }
+
+      return left.login.localeCompare(right.login)
+    })
+    .slice(0, 10)
+}
+
 export function computeRepoAnalytics(
   bundle: RepositoryBundle,
   options: AnalyticsOptions,
@@ -217,7 +325,7 @@ export function computeRepoAnalytics(
     options.includeBots,
   )
 
-  const weekStarts = buildWeeklyWindow(12)
+  const weekStarts = buildWeeklyWindow(52)
 
   const issueOpenedByWeek = countEventsPerWeek(
     issues.map((issue) => issue.createdAt),
@@ -319,6 +427,13 @@ export function computeRepoAnalytics(
         (contributor) =>
           !isBotActor(contributor.author?.login, contributor.author?.type),
       )
+
+  const topContributorsLast3Weeks = buildTopContributorsLast3Weeks(
+    bundle.snapshot.metadata.owner,
+    bundle.snapshot.metadata.name,
+    issues,
+    pullRequests,
+  )
 
   const now = Date.now()
   const cutoff7d = now - 7 * DAY_MS
@@ -529,6 +644,7 @@ export function computeRepoAnalytics(
       newContributorsMonthly,
       concentrationTop3Pct,
       communityCommitRatio,
+      topContributorsLast3Weeks,
     },
     commitMetrics: {
       weeklyTrend: commitTrend.map((entry) => ({

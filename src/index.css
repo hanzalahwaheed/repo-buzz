@@ -420,6 +420,50 @@ input::placeholder {
   gap: 0.7rem;
 }
 
+.chart-toolbar {
+  margin-top: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.chart-subtle {
+  margin: 0 0 0.45rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.window-control {
+  display: inline-flex;
+  gap: 0.3rem;
+  background: rgba(11, 17, 32, 0.72);
+  border: 1px solid rgba(146, 171, 218, 0.26);
+  border-radius: 999px;
+  padding: 0.18rem;
+}
+
+.window-button {
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0.32rem 0.62rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.window-button:hover:not(:disabled) {
+  transform: none;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.window-button.active {
+  background: linear-gradient(120deg, rgba(78, 205, 196, 0.3), rgba(110, 231, 183, 0.3));
+  color: #e9fff8;
+}
+
 .chart-card {
   border-radius: 12px;
   border: 1px solid rgba(146, 171, 218, 0.23);
@@ -430,6 +474,37 @@ input::placeholder {
 .chart-card h3 {
   margin: 0 0 0.55rem;
   font-size: 0.9rem;
+}
+
+.contrib-table-wrap {
+  overflow-x: auto;
+}
+
+.contrib-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 520px;
+}
+
+.contrib-table th,
+.contrib-table td {
+  text-align: left;
+  padding: 0.44rem 0.5rem;
+  border-bottom: 1px solid rgba(146, 171, 218, 0.2);
+  font-size: 0.82rem;
+}
+
+.contrib-table th {
+  color: #bfd0ef;
+  font-weight: 600;
+}
+
+.contrib-table td {
+  color: var(--text-dim);
+}
+
+.contrib-table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .breakdown-list {
@@ -527,7 +602,8 @@ input::placeholder {
   .search-form,
   .header-actions,
   .history-item,
-  .history-actions {
+  .history-actions,
+  .chart-toolbar {
     flex-direction: column;
     align-items: stretch;
   }

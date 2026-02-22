@@ -159,6 +159,18 @@ export interface MonthlyContributorTrend {
   newContributors: number
 }
 
+export interface RecentContributorActivity {
+  login: string
+  activityUrl: string
+  issuesUrl: string
+  prsOpenedUrl: string
+  prsMergedUrl: string
+  issuesOpenedLast3Weeks: number
+  prsOpenedLast3Weeks: number
+  prsMergedLast3Weeks: number
+  combinedActivity: number
+}
+
 export interface HealthComponent {
   key:
     | 'commitMomentum'
@@ -200,6 +212,7 @@ export interface RepoAnalytics {
     newContributorsMonthly: MonthlyContributorTrend[]
     concentrationTop3Pct: number | null
     communityCommitRatio: number | null
+    topContributorsLast3Weeks: RecentContributorActivity[]
   }
   commitMetrics: {
     weeklyTrend: WeeklyCommitTrend[]
