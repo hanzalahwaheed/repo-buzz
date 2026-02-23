@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 
 import { OrgView } from './components/OrgView'
 import { RateLimitIndicator } from './components/RateLimitIndicator'
@@ -13,6 +14,7 @@ import {
   type RepoTarget,
   type SearchTarget,
 } from './hooks/useRepoBuzzQueries'
+import { clearRepoBundleCache } from './lib/cache'
 import { toUserMessage } from './lib/githubError'
 import { GitHubApiClient } from './lib/githubApi'
 import {
@@ -38,6 +40,7 @@ import type {
   PersistedOrgVersion,
   PersistedRepoVersion,
   PersistedSearchHistoryEntry,
+  SnapshotKind,
 } from './types/storage'
 
 interface RateLimitState {
@@ -239,6 +242,18 @@ function buildSnapshotUrl(entry: PersistedSearchHistoryEntry): string {
   return url.toString()
 }
 
+function replaceSnapshotUrlParams(kind: SnapshotKind, snapshotId: string): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const url = new URL(window.location.href)
+  url.pathname = getSnapshotPath(url.pathname)
+  url.searchParams.set('snapshotKind', kind)
+  url.searchParams.set('snapshotId', snapshotId)
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+}
+
 export default function App() {
   const isSnapshotRoute = useMemo(
     () =>
@@ -281,6 +296,8 @@ export default function App() {
   const [dataViewMode, setDataViewMode] = useState<DataViewMode>(
     initialState.dataViewMode,
   )
+  const [isSnapshotSheetOpen, setIsSnapshotSheetOpen] = useState(false)
+  const queryClient = useQueryClient()
 
   const handleRateLimitUpdate = useCallback((snapshot: RateLimitSnapshot) => {
     setRateLimits((current) => ({
@@ -327,8 +344,17 @@ export default function App() {
           snapshotId: saved.id,
         }),
       )
+
+      if (isSnapshotRoute) {
+        setStoredOrgVersion(saved)
+        setStoredRepoVersion(null)
+        setSelectedRepo(null)
+        setDataViewMode('storage')
+        setMessage(`Snapshot refreshed for ${saved.org} at ${formatLocalDate(saved.fetchedAt)}.`)
+        replaceSnapshotUrlParams('org', saved.id)
+      }
     },
-    [apiClient.isAuthenticated, orgName],
+    [apiClient.isAuthenticated, isSnapshotRoute, orgName],
   )
 
   const handleRepoFetchedFromNetwork = useCallback(
@@ -358,8 +384,18 @@ export default function App() {
           snapshotId: saved.id,
         }),
       )
+
+      if (isSnapshotRoute) {
+        setStoredRepoVersion(saved)
+        if (activeTarget?.type === 'repo') {
+          setStoredOrgVersion(null)
+        }
+        setDataViewMode('storage')
+        setMessage(`Snapshot refreshed for ${saved.target} at ${formatLocalDate(saved.fetchedAt)}.`)
+        replaceSnapshotUrlParams('repo', saved.id)
+      }
     },
-    [apiClient.isAuthenticated, repoTarget],
+    [activeTarget, apiClient.isAuthenticated, isSnapshotRoute, repoTarget],
   )
 
   const orgQuery = useOrgRepositoriesQuery({
@@ -430,6 +466,7 @@ export default function App() {
           token,
         })
       : null
+  const isNetworkFetching = orgQuery.isFetching || repoQuery.isFetching
 
   const handleSearchSubmit = (value: string) => {
     const target = parseSearchTarget(value)
@@ -529,62 +566,54 @@ export default function App() {
     setMessage('Token detected in search input and moved into authentication field.')
   }
 
-  return (
-    <main className="app-shell">
-      <header className="hero">
-        <p className="eyebrow">GitHub OSS Activity Tracker</p>
-        <h1>repoBuzz</h1>
-        {isSnapshotRoute ? (
-          <p>Snapshot route for saved local versions.</p>
-        ) : (
-          <p>
-            Track org-level momentum and drill into repo health with hybrid REST + GraphQL metrics.
-          </p>
-        )}
-      </header>
+  const handleRefreshSnapshot = useCallback(() => {
+    if (!isSnapshotRoute) {
+      return
+    }
 
-      {!isSnapshotRoute ? (
-        <>
-          <section className="control-grid">
-            <TokenInput
-              token={token}
-              onTokenChange={setToken}
-              onClearToken={() => setToken('')}
-            />
+    if (!activeTarget) {
+      setMessage('Load a snapshot first from history, then refresh it.')
+      return
+    }
 
-            <SearchBar
-              value={searchInput}
-              onChange={setSearchInput}
-              onSubmit={handleSearchSubmit}
-              onLoadSaved={handleLoadSaved}
-              onTokenDetected={handleTokenDetected}
-              loading={orgQuery.isLoading || repoQuery.isLoading}
-            />
+    const targetLabel =
+      activeTarget.type === 'repo'
+        ? `${activeTarget.value.owner}/${activeTarget.value.repo}`
+        : activeTarget.value.org
 
-            <RateLimitIndicator
-              restRateLimit={rateLimits.rest}
-              graphRateLimit={rateLimits.graphql}
-              isAuthenticated={apiClient.isAuthenticated}
-            />
-          </section>
+    setMessage(`Refreshing ${targetLabel} from GitHub...`)
+    clearRepoBundleCache()
 
-          <SearchHistory
-            history={history}
-            onOpen={handleOpenHistory}
-            onRemove={(entryId) => setHistory(removeHistoryEntry(entryId))}
-            onClear={() => setHistory(clearHistory())}
-            onClearAllPersistedData={() => {
-              clearAllPersistedData()
-              setHistory([])
-              setStoredOrgVersion(null)
-              setStoredRepoVersion(null)
-              setDataViewMode('network')
-              setMessage('Cleared all saved snapshots and history.')
-            }}
-          />
-        </>
-      ) : null}
+    if (activeTarget.type === 'repo') {
+      queryClient.removeQueries({
+        queryKey: ['repository-bundle', activeTarget.value.owner, activeTarget.value.repo],
+      })
+    } else {
+      queryClient.removeQueries({
+        queryKey: ['org-repositories', activeTarget.value.org],
+      })
+      setSelectedRepo(null)
+    }
 
+    setStoredOrgVersion(null)
+    setStoredRepoVersion(null)
+    setDataViewMode('network')
+  }, [activeTarget, isSnapshotRoute, queryClient])
+
+  const activeTargetLabel = useMemo(() => {
+    if (!activeTarget) {
+      return null
+    }
+
+    if (activeTarget.type === 'repo') {
+      return `${activeTarget.value.owner}/${activeTarget.value.repo}`
+    }
+
+    return activeTarget.value.org
+  }, [activeTarget])
+
+  const appContent = (
+    <>
       {message ? (
         <section className="panel">
           <p className="warning">{message}</p>
@@ -595,7 +624,7 @@ export default function App() {
         <section className="panel">
           <p className="subtle">
             {isSnapshotRoute
-              ? 'Viewing saved local snapshot in read-only snapshot route.'
+              ? 'Viewing saved local snapshot. Use Snapshot tools to refresh from GitHub.'
               : 'Viewing saved local snapshot. Use "Fetch activity" to refresh from GitHub.'}
           </p>
           {isSnapshotRoute ? (
@@ -703,6 +732,120 @@ export default function App() {
             </>
           )}
         </section>
+      ) : null}
+    </>
+  )
+
+  return (
+    <main className="app-shell">
+      <header className="hero">
+        <p className="eyebrow">GitHub OSS Activity Tracker</p>
+        <h1>repoBuzz</h1>
+        {isSnapshotRoute ? (
+          <p>Snapshot route for saved local versions.</p>
+        ) : (
+          <p>
+            Track org-level momentum and drill into repo health with hybrid REST + GraphQL metrics.
+          </p>
+        )}
+      </header>
+
+      {isSnapshotRoute ? (
+        <section className="snapshot-utility-bar">
+          <button type="button" className="ghost" onClick={() => setIsSnapshotSheetOpen(true)}>
+            Snapshot tools
+          </button>
+        </section>
+      ) : null}
+
+      {!isSnapshotRoute ? (
+        <>
+          <section className="control-grid">
+            <TokenInput
+              token={token}
+              onTokenChange={setToken}
+              onClearToken={() => setToken('')}
+            />
+
+            <SearchBar
+              value={searchInput}
+              onChange={setSearchInput}
+              onSubmit={handleSearchSubmit}
+              onLoadSaved={handleLoadSaved}
+              onTokenDetected={handleTokenDetected}
+              loading={isNetworkFetching}
+            />
+
+            <RateLimitIndicator
+              restRateLimit={rateLimits.rest}
+              graphRateLimit={rateLimits.graphql}
+              isAuthenticated={apiClient.isAuthenticated}
+            />
+          </section>
+
+          <SearchHistory
+            history={history}
+            onOpen={handleOpenHistory}
+            onRemove={(entryId) => setHistory(removeHistoryEntry(entryId))}
+            onClear={() => setHistory(clearHistory())}
+            onClearAllPersistedData={() => {
+              clearAllPersistedData()
+              setHistory([])
+              setStoredOrgVersion(null)
+              setStoredRepoVersion(null)
+              setDataViewMode('network')
+              setMessage('Cleared all saved snapshots and history.')
+            }}
+          />
+        </>
+      ) : null}
+      {appContent}
+
+      {isSnapshotRoute && isSnapshotSheetOpen ? (
+        <div
+          className="snapshot-sheet-backdrop"
+          onClick={() => setIsSnapshotSheetOpen(false)}
+          role="presentation"
+        >
+          <aside
+            className="snapshot-sheet"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Snapshot tools"
+          >
+            <header className="snapshot-sheet-head">
+              <h2>Snapshot tools</h2>
+              <button type="button" className="ghost" onClick={() => setIsSnapshotSheetOpen(false)}>
+                Close
+              </button>
+            </header>
+
+            <TokenInput
+              token={token}
+              onTokenChange={setToken}
+              onClearToken={() => setToken('')}
+            />
+
+            <section className="panel">
+              <p className="subtle snapshot-target">
+                {activeTargetLabel ? `Current target: ${activeTargetLabel}` : 'No target loaded.'}
+              </p>
+              <div className="snapshot-refresh-actions">
+                <button
+                  type="button"
+                  onClick={handleRefreshSnapshot}
+                  disabled={!activeTarget || isNetworkFetching}
+                >
+                  {isNetworkFetching ? 'Refreshing...' : 'Refresh from GitHub'}
+                </button>
+              </div>
+              <p className="subtle">
+                Refreshing saves a new timestamped snapshot and updates this URL.
+              </p>
+            </section>
+          </aside>
+        </div>
       ) : null}
     </main>
   )
