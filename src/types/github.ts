@@ -82,7 +82,6 @@ export interface ContributorWeek {
 }
 
 export interface ContributorStat {
-  total: number
   weeks: ContributorWeek[]
   author: GitHubActor | null
 }
@@ -161,14 +160,14 @@ export interface MonthlyContributorTrend {
 
 export interface RecentContributorActivity {
   login: string
+  isMaintainer: boolean
   activityUrl: string
   issuesUrl: string
   prsOpenedUrl: string
   prsMergedUrl: string
-  issuesOpenedLast3Weeks: number
-  prsOpenedLast3Weeks: number
-  prsMergedLast3Weeks: number
-  combinedActivity: number
+  issuesOpened: number
+  openPrs: number
+  totalMergedPrs: number
 }
 
 export interface HealthComponent {

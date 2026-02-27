@@ -25,6 +25,8 @@ interface RepoDetailViewProps {
   error: string | null
   includeBots: boolean
   onIncludeBotsChange: (include: boolean) => void
+  excludeMaintainers: boolean
+  onExcludeMaintainersChange: (exclude: boolean) => void
   onBackToOrg?: () => void
   fetchedAt?: string
 }
@@ -156,6 +158,8 @@ export function RepoDetailView({
   error,
   includeBots,
   onIncludeBotsChange,
+  excludeMaintainers,
+  onExcludeMaintainersChange,
   onBackToOrg,
   fetchedAt,
 }: RepoDetailViewProps) {
@@ -287,6 +291,14 @@ export function RepoDetailView({
             onChange={(event) => onIncludeBotsChange(event.target.checked)}
           />
           Include bot accounts
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={excludeMaintainers}
+            onChange={(event) => onExcludeMaintainersChange(event.target.checked)}
+          />
+          Hide maintainers in contributor table
         </label>
       </div>
 
@@ -575,10 +587,18 @@ export function RepoDetailView({
         </article>
 
         <article className="chart-card">
-          <h3>Top contributors (last 3 weeks)</h3>
-          <p className="chart-subtle">Ranked by issues opened + PRs opened + PRs merged in the last 21 days.</p>
+          <h3>Top contributors</h3>
+          <p className="chart-subtle">
+            {excludeMaintainers
+              ? 'Maintainers hidden. Ranked by issues opened + open PRs + total merged PRs.'
+              : 'Ranked by issues opened + open PRs + total merged PRs.'}
+          </p>
           {analytics.contributorMetrics.topContributorsLast3Weeks.length === 0 ? (
-            <p className="subtle">No recent contributor or issue-opening activity found.</p>
+            <p className="subtle">
+              {excludeMaintainers
+                ? 'No non-maintainer contributor activity found.'
+                : 'No contributor or issue-opening activity found.'}
+            </p>
           ) : (
             <div className="contrib-table-wrap">
               <table className="contrib-table">
@@ -586,10 +606,9 @@ export function RepoDetailView({
                   <tr>
                     <th scope="col">#</th>
                     <th scope="col">Contributor</th>
-                    <th scope="col">Issues Opened (3w)</th>
-                    <th scope="col">PRs Opened (3w)</th>
-                    <th scope="col">PRs Merged (3w)</th>
-                    <th scope="col">Combined</th>
+                    <th scope="col">Issues Opened</th>
+                    <th scope="col">Open PRs</th>
+                    <th scope="col">Total Merged PRs</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -601,35 +620,37 @@ export function RepoDetailView({
                           <a href={entry.activityUrl} target="_blank" rel="noreferrer">
                             {entry.login}
                           </a>
+                          {!excludeMaintainers && entry.isMaintainer ? (
+                            <span className="contrib-inline-tag">Maintainer</span>
+                          ) : null}
                         </td>
                         <td>
-                          {entry.issuesOpenedLast3Weeks > 0 ? (
+                          {entry.issuesOpened > 0 ? (
                             <a href={entry.issuesUrl} target="_blank" rel="noreferrer">
-                              {entry.issuesOpenedLast3Weeks}
+                              {entry.issuesOpened}
                             </a>
                           ) : (
                             0
                           )}
                         </td>
                         <td>
-                          {entry.prsOpenedLast3Weeks > 0 ? (
+                          {entry.openPrs > 0 ? (
                             <a href={entry.prsOpenedUrl} target="_blank" rel="noreferrer">
-                              {entry.prsOpenedLast3Weeks}
+                              {entry.openPrs}
                             </a>
                           ) : (
                             0
                           )}
                         </td>
                         <td>
-                          {entry.prsMergedLast3Weeks > 0 ? (
+                          {entry.totalMergedPrs > 0 ? (
                             <a href={entry.prsMergedUrl} target="_blank" rel="noreferrer">
-                              {entry.prsMergedLast3Weeks}
+                              {entry.totalMergedPrs}
                             </a>
                           ) : (
                             0
                           )}
                         </td>
-                        <td>{entry.combinedActivity}</td>
                       </tr>
                     ),
                   )}

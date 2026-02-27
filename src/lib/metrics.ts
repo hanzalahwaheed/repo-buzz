@@ -13,6 +13,7 @@ const WEEK_MS = 7 * DAY_MS
 
 interface AnalyticsOptions {
   includeBots: boolean
+  excludeMaintainers: boolean
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -21,6 +22,10 @@ function clamp(value: number, min: number, max: number): number {
 
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0)
+}
+
+function contributorCommitTotal(weeks: Array<{ c: number }>): number {
+  return weeks.reduce((total, week) => total + week.c, 0)
 }
 
 function median(values: number[]): number | null {
@@ -59,6 +64,16 @@ function isBotActor(login: string | undefined, type: string | undefined): boolea
   }
 
   return Boolean(login?.toLowerCase().endsWith('[bot]'))
+}
+
+const MAINTAINER_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR'])
+
+function isMaintainerAssociation(association: string | null): boolean {
+  if (!association) {
+    return false
+  }
+
+  return MAINTAINER_ASSOCIATIONS.has(association)
 }
 
 function filterIssues(issues: GitHubIssueNode[], includeBots: boolean): GitHubIssueNode[] {
@@ -213,14 +228,15 @@ function buildTopContributorsLast3Weeks(
   repo: string,
   issues: GitHubIssueNode[],
   pullRequests: GitHubPullRequestNode[],
+  excludeMaintainers: boolean,
 ): RecentContributorActivity[] {
-  const cutoff21d = Date.now() - 21 * DAY_MS
   const statsByAuthor = new Map<
     string,
     {
-      issuesOpenedLast3Weeks: number
-      prsOpenedLast3Weeks: number
-      prsMergedLast3Weeks: number
+      issuesOpened: number
+      openPrs: number
+      totalMergedPrs: number
+      isMaintainer: boolean
     }
   >()
 
@@ -231,9 +247,10 @@ function buildTopContributorsLast3Weeks(
     }
 
     const created = {
-      issuesOpenedLast3Weeks: 0,
-      prsOpenedLast3Weeks: 0,
-      prsMergedLast3Weeks: 0,
+      issuesOpened: 0,
+      openPrs: 0,
+      totalMergedPrs: 0,
+      isMaintainer: false,
     }
     statsByAuthor.set(login, created)
     return created
@@ -244,11 +261,9 @@ function buildTopContributorsLast3Weeks(
       continue
     }
 
-    if (new Date(issue.createdAt).getTime() < cutoff21d) {
-      continue
-    }
-
-    ensure(issue.author.login).issuesOpenedLast3Weeks += 1
+    const stats = ensure(issue.author.login)
+    stats.issuesOpened += 1
+    stats.isMaintainer = stats.isMaintainer || isMaintainerAssociation(issue.authorAssociation)
   }
 
   for (const pullRequest of pullRequests) {
@@ -257,16 +272,15 @@ function buildTopContributorsLast3Weeks(
     }
 
     const stats = ensure(pullRequest.author.login)
+    stats.isMaintainer =
+      stats.isMaintainer || isMaintainerAssociation(pullRequest.authorAssociation)
 
-    if (new Date(pullRequest.createdAt).getTime() >= cutoff21d) {
-      stats.prsOpenedLast3Weeks += 1
+    if (pullRequest.state === 'OPEN') {
+      stats.openPrs += 1
     }
 
-    if (
-      pullRequest.mergedAt &&
-      new Date(pullRequest.mergedAt).getTime() >= cutoff21d
-    ) {
-      stats.prsMergedLast3Weeks += 1
+    if (pullRequest.mergedAt || pullRequest.state === 'MERGED') {
+      stats.totalMergedPrs += 1
     }
   }
 
@@ -275,39 +289,45 @@ function buildTopContributorsLast3Weeks(
   return [...statsByAuthor.entries()]
     .map(([login, stats]) => {
       const issuesQuery = `is:issue author:${login}`
-      const prsOpenedQuery = `is:pr author:${login}`
+      const prsOpenedQuery = `is:pr is:open author:${login}`
       const prsMergedQuery = `is:pr is:merged author:${login}`
       return {
         login,
+        isMaintainer: stats.isMaintainer,
         activityUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(`author:${login}`)}`,
         issuesUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(issuesQuery)}`,
         prsOpenedUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(prsOpenedQuery)}`,
         prsMergedUrl: `https://github.com/${encodedOwnerRepo}/issues?q=${encodeURIComponent(prsMergedQuery)}`,
-        issuesOpenedLast3Weeks: stats.issuesOpenedLast3Weeks,
-        prsOpenedLast3Weeks: stats.prsOpenedLast3Weeks,
-        prsMergedLast3Weeks: stats.prsMergedLast3Weeks,
-        combinedActivity:
-          stats.issuesOpenedLast3Weeks +
-          stats.prsOpenedLast3Weeks +
-          stats.prsMergedLast3Weeks,
+        issuesOpened: stats.issuesOpened,
+        openPrs: stats.openPrs,
+        totalMergedPrs: stats.totalMergedPrs,
       }
     })
-    .filter((entry) => entry.combinedActivity > 0)
+    .filter(
+      (entry) =>
+        entry.issuesOpened > 0 || entry.openPrs > 0 || entry.totalMergedPrs > 0,
+    )
+    .filter((entry) => (excludeMaintainers ? !entry.isMaintainer : true))
     .sort((left, right) => {
-      if (right.combinedActivity !== left.combinedActivity) {
-        return right.combinedActivity - left.combinedActivity
+      const leftActivity =
+        left.issuesOpened + left.openPrs + left.totalMergedPrs
+      const rightActivity =
+        right.issuesOpened + right.openPrs + right.totalMergedPrs
+
+      if (rightActivity !== leftActivity) {
+        return rightActivity - leftActivity
       }
 
-      if (right.prsMergedLast3Weeks !== left.prsMergedLast3Weeks) {
-        return right.prsMergedLast3Weeks - left.prsMergedLast3Weeks
+      if (right.totalMergedPrs !== left.totalMergedPrs) {
+        return right.totalMergedPrs - left.totalMergedPrs
       }
 
-      if (right.prsOpenedLast3Weeks !== left.prsOpenedLast3Weeks) {
-        return right.prsOpenedLast3Weeks - left.prsOpenedLast3Weeks
+      if (right.openPrs !== left.openPrs) {
+        return right.openPrs - left.openPrs
       }
 
-      if (right.issuesOpenedLast3Weeks !== left.issuesOpenedLast3Weeks) {
-        return right.issuesOpenedLast3Weeks - left.issuesOpenedLast3Weeks
+      if (right.issuesOpened !== left.issuesOpened) {
+        return right.issuesOpened - left.issuesOpened
       }
 
       return left.login.localeCompare(right.login)
@@ -433,6 +453,7 @@ export function computeRepoAnalytics(
     bundle.snapshot.metadata.name,
     issues,
     pullRequests,
+    options.excludeMaintainers,
   )
 
   const now = Date.now()
@@ -451,7 +472,7 @@ export function computeRepoAnalytics(
   ).length
 
   const contributorTotals = contributors
-    .map((contributor) => contributor.total)
+    .map((contributor) => contributorCommitTotal(contributor.weeks))
     .sort((left, right) => right - left)
 
   const top3Total = sum(contributorTotals.slice(0, 3))

@@ -282,6 +282,7 @@ export default function App() {
   )
   const [showForks, setShowForks] = useState(false)
   const [includeBots, setIncludeBots] = useState(false)
+  const [excludeMaintainers, setExcludeMaintainers] = useState(false)
   const [message, setMessage] = useState<string | null>(initialState.message)
   const [rateLimits, setRateLimits] = useState<RateLimitState>({})
   const [history, setHistory] = useState<PersistedSearchHistoryEntry[]>(() =>
@@ -432,9 +433,10 @@ export default function App() {
       activeRepoBundle
         ? computeRepoAnalytics(activeRepoBundle, {
             includeBots,
+            excludeMaintainers,
           })
         : null,
-    [activeRepoBundle, includeBots],
+    [activeRepoBundle, excludeMaintainers, includeBots],
   )
 
   const orgRepos = useMemo(() => {
@@ -674,6 +676,7 @@ export default function App() {
                 repo: repository.name,
               })
               setIncludeBots(false)
+              setExcludeMaintainers(false)
               return
             }
 
@@ -684,6 +687,7 @@ export default function App() {
               repo: repository.name,
             })
             setIncludeBots(false)
+            setExcludeMaintainers(false)
           }}
         />
       ) : null}
@@ -697,6 +701,8 @@ export default function App() {
           error={usingStoredRepo ? null : repoErrorMessage}
           includeBots={includeBots}
           onIncludeBotsChange={setIncludeBots}
+          excludeMaintainers={excludeMaintainers}
+          onExcludeMaintainersChange={setExcludeMaintainers}
           onBackToOrg={
             activeTarget?.type === 'org'
               ? () => {

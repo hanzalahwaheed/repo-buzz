@@ -276,6 +276,18 @@ function normalizeActor(
   }
 }
 
+function sanitizeContributorStats(contributors: ContributorStat[]): ContributorStat[] {
+  return contributors.map((contributor) => ({
+    author: contributor.author,
+    weeks: contributor.weeks.map((week) => ({
+      w: week.w,
+      a: week.a,
+      d: week.d,
+      c: week.c,
+    })),
+  }))
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -937,7 +949,7 @@ export class GitHubApiClient {
       ])
 
     let commitActivityData = commitActivity.data
-    let contributorsData = contributors.data
+    let contributorsData = sanitizeContributorStats(contributors.data)
     const fallbackMessages: string[] = []
 
     const hasCommitLimitUnavailable = [
@@ -960,7 +972,9 @@ export class GitHubApiClient {
         }
 
         if (contributors.unavailableReason === 'commit_limit') {
-          contributorsData = recentCommitFallback.contributors
+          contributorsData = sanitizeContributorStats(
+            recentCommitFallback.contributors,
+          )
         }
 
         const truncatedSuffix = recentCommitFallback.truncated
@@ -1154,8 +1168,8 @@ export class GitHubApiClient {
       }))
 
     const contributors: ContributorStat[] = [...contributorsByKey.values()]
+      .sort((left, right) => right.total - left.total)
       .map((entry) => ({
-        total: entry.total,
         author: entry.author,
         weeks: [...entry.weeks.entries()]
           .sort(([left], [right]) => left - right)
@@ -1166,7 +1180,6 @@ export class GitHubApiClient {
             c,
           })),
       }))
-      .sort((left, right) => right.total - left.total)
 
     return {
       commitActivity,

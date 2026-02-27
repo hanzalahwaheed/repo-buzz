@@ -394,6 +394,7 @@ input::placeholder {
 
 .switch-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   color: var(--text-dim);
@@ -558,6 +559,17 @@ input::placeholder {
 
 .contrib-table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.contrib-inline-tag {
+  display: inline-block;
+  margin-left: 0.42rem;
+  border: 1px solid rgba(167, 190, 232, 0.32);
+  border-radius: 999px;
+  padding: 0.12rem 0.4rem;
+  font-size: 0.67rem;
+  color: #d8e5ff;
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .breakdown-list {
