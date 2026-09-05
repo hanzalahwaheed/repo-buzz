@@ -1,6 +1,6 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=DM+Serif+Display:ital@0;1&family=IBM+Plex+Mono:wght@400;500&display=swap');
 :root {
-  font-family: "DM Sans", sans-serif;
+  font-family: 'DM Sans', sans-serif;
   color: #283b31;
   background: #f8f9f4;
   font-synthesis: none;
@@ -68,8 +68,8 @@ button:disabled {
   background: #edf1e8;
   color: #263d30;
 }
-input[type="text"],
-input[type="password"],
+input[type='text'],
+input[type='password'],
 input:not([type]) {
   min-width: 0;
   background: transparent;
@@ -81,7 +81,7 @@ input:not([type]) {
 input::placeholder {
   color: #838a7f;
 }
-input[type="checkbox"] {
+input[type='checkbox'] {
   accent-color: #2e624b;
 }
 input:focus-visible,
@@ -130,7 +130,7 @@ h3 {
   font-weight: 700;
 }
 .brand small {
-  font-family: "IBM Plex Mono", monospace;
+  font-family: 'IBM Plex Mono', monospace;
   font-size: 8px;
   line-height: 1.65;
   letter-spacing: 1.2px;
@@ -196,7 +196,7 @@ nav > a {
   padding: 76px 0 60px;
 }
 .eyebrow {
-  font-family: "IBM Plex Mono", monospace;
+  font-family: 'IBM Plex Mono', monospace;
   font-size: 10px;
   letter-spacing: 1.5px;
   font-weight: 400;
@@ -215,7 +215,7 @@ nav > a {
   border-radius: 50%;
 }
 .hero h1 {
-  font-family: "DM Serif Display", Georgia, serif;
+  font-family: 'DM Serif Display', Georgia, serif;
   font-size: clamp(38px, 4.05vw, 57px);
   font-weight: 400;
   line-height: 1.12;
@@ -282,13 +282,13 @@ nav > a {
 }
 .note-number {
   font:
-    9px "IBM Plex Mono",
+    9px 'IBM Plex Mono',
     monospace;
   letter-spacing: 1.2px;
   color: #7c8468;
 }
 .field-note h2 {
-  font-family: "DM Serif Display", Georgia, serif;
+  font-family: 'DM Serif Display', Georgia, serif;
   font-size: 30px;
   font-weight: 400;
   line-height: 1.15;
@@ -316,7 +316,7 @@ nav > a {
 }
 .orbit:before,
 .orbit:after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 10px 52px;
   border: 1px dashed #b8c5a1;
@@ -400,7 +400,7 @@ nav > a {
   margin-bottom: 27px;
   color: #a3ad97;
   font:
-    11px "IBM Plex Mono",
+    11px 'IBM Plex Mono',
     monospace;
 }
 .ecosystem-top span:last-child {
@@ -468,7 +468,7 @@ nav > a {
 }
 .reading-guide article > span {
   font:
-    8px "IBM Plex Mono",
+    8px 'IBM Plex Mono',
     monospace;
   color: #8b977a;
   letter-spacing: 1px;
@@ -690,7 +690,7 @@ footer > a:last-child {
 .opportunity-panel h2 {
   font-size: 25px;
   margin-bottom: 10px;
-  font-family: "DM Serif Display", Georgia, serif;
+  font-family: 'DM Serif Display', Georgia, serif;
   font-weight: 400;
 }
 .opportunity-panel p {
@@ -834,7 +834,7 @@ footer > a:last-child {
   justify-content: center;
 }
 .community-note h3 {
-  font-family: "DM Serif Display", Georgia, serif;
+  font-family: 'DM Serif Display', Georgia, serif;
   font-size: 29px;
   font-weight: 400;
   line-height: 1.3;
@@ -941,7 +941,7 @@ footer > a:last-child {
 .saved-list small {
   display: block;
   font:
-    9px "IBM Plex Mono",
+    9px 'IBM Plex Mono',
     monospace;
   color: #91a080;
   margin-bottom: 8px;
@@ -970,7 +970,7 @@ footer > a:last-child {
 .empty-state h1,
 .empty-state h2 {
   margin: 0;
-  font-family: "DM Serif Display", Georgia, serif;
+  font-family: 'DM Serif Display', Georgia, serif;
   font-weight: 400;
   font-size: 33px;
 }
@@ -1250,7 +1250,7 @@ footer > a:last-child {
   gap: 8px;
   font-size: 11px;
 }
-.org-filters input:not([type="checkbox"]),
+.org-filters input:not([type='checkbox']),
 .org-filters select {
   border: 1px solid var(--border);
   background: #f9faf5;
@@ -1296,7 +1296,7 @@ footer > a:last-child {
   border-radius: 50%;
   background: #e7eddc;
   font:
-    10px "IBM Plex Mono",
+    10px 'IBM Plex Mono',
     monospace;
   color: #637951;
 }
@@ -1320,4 +1320,115 @@ footer > a:last-child {
   .people-grid {
     grid-template-columns: 1fr;
   }
+}
+.connected-overview {
+  display: grid;
+  grid-template-columns: 1fr 440px;
+  align-items: center;
+  gap: 36px;
+  padding: 36px 0 20px;
+}
+.connected-overview .eyebrow {
+  margin-bottom: 10px;
+}
+.connected-overview h2 {
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-size: 34px;
+  font-weight: 400;
+  margin-bottom: 12px;
+}
+.connected-overview > div > p:last-child {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.connected-overview .panel {
+  padding: 18px 22px;
+}
+.connected-overview .panel-header {
+  margin-bottom: 12px;
+}
+.connected-overview .panel-header h2 {
+  font:
+    500 12px 'DM Sans',
+    sans-serif;
+  letter-spacing: 0;
+}
+.connected-overview .rate-card .value {
+  margin-bottom: 4px;
+}
+.hero.hero-connected {
+  display: block;
+  padding: 10px 0 30px;
+}
+.hero-connected .hero-copy {
+  max-width: 800px;
+}
+.recent-explorations {
+  padding: 26px 0 36px;
+  border-top: 1px solid var(--border);
+}
+.recent-explorations .section-heading > a {
+  font-size: 11px;
+  color: #607454;
+}
+.recent-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.recent-grid > a {
+  background: #fffefb;
+  border: 1px solid var(--border);
+  padding: 20px;
+  border-radius: 9px;
+}
+.recent-grid h3 {
+  font-size: 17px;
+  overflow-wrap: anywhere;
+  margin: 15px 0 8px;
+}
+.recent-grid p {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin: 0;
+}
+.recent-grid .eyebrow {
+  font-size: 8px;
+}
+.settings-layout {
+  grid-template-columns: 1fr;
+}
+.settings-layout .token-panel {
+  max-width: 740px;
+}
+@media (max-width: 900px) {
+  .connected-overview {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .recent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 500px) {
+  .recent-grid {
+    grid-template-columns: 1fr;
+  }
+  .connected-overview h2 {
+    font-size: 29px;
+  }
+}
+.connected-overview h1 {
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-size: 34px;
+  font-weight: 400;
+  margin-bottom: 12px;
+}
+.connection:not(button) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.notice a {
+  text-decoration: underline;
 }

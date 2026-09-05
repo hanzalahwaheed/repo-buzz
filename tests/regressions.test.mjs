@@ -3,7 +3,7 @@ import { after, afterEach, test } from 'node:test'
 import { createServer } from 'vite'
 
 const vite = await createServer({
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: false, ws: false },
   appType: 'custom',
 })
 const { computeRepoAnalytics } = await vite.ssrLoadModule('/src/lib/metrics.ts')

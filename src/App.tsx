@@ -1,21 +1,16 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useState, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { GitHubApiClient } from './lib/githubApi'
 import { toUserMessage } from './lib/githubError'
 import { parseSearchTarget, GITHUB_TOKEN_REGEX } from './lib/search'
 import {
-  getLatestRepoVersion,
-  getLatestOrgVersion,
-  saveRepoVersion,
-  saveOrgVersion,
   listSearchHistory,
   appendSearchHistory,
   clearAllPersistedData,
 } from './lib/localStore'
-import { TokenInput } from './components/TokenInput'
+import { openExplorationTab } from './lib/explorationTabs'
+import { fetchExploration, fetchLibraryStatus } from './lib/libraryApi'
 import { OrgView } from './components/OrgView'
 import { RateLimitIndicator } from './components/RateLimitIndicator'
-import type { RateLimitSnapshot } from './types/github'
 const RepositoryPage = lazy(() => import('./components/RepositoryPage'))
 
 function routeTarget() {
@@ -31,44 +26,52 @@ function go(target: string) {
 
 export default function App() {
   const [route, setRoute] = useState(routeTarget)
-  const [token, setToken] = useState('')
-  const [settings, setSettings] = useState(false)
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
-  const [rates, setRates] = useState<{
-    rest?: RateLimitSnapshot
-    graphql?: RateLimitSnapshot
-  }>({})
-  const queryClient = useQueryClient()
+  const [history, setHistory] = useState(listSearchHistory)
+  const status = useQuery({
+    queryKey: ['library-status'],
+    queryFn: ({ signal }) => fetchLibraryStatus(signal),
+    refetchInterval: 60000,
+    staleTime: 30000,
+    refetchOnWindowFocus: true,
+    retry: false,
+  })
   useEffect(() => {
-    const update = () => {
+    const updateHistory = () => setHistory(listSearchHistory())
+    const updateRoute = () => {
       setRoute(routeTarget())
       setError('')
+      updateHistory()
       window.scrollTo(0, 0)
     }
-    window.addEventListener('hashchange', update)
-    return () => window.removeEventListener('hashchange', update)
+    window.addEventListener('storage', updateHistory)
+    window.addEventListener('focus', updateHistory)
+    window.addEventListener('hashchange', updateRoute)
+    return () => {
+      window.removeEventListener('storage', updateHistory)
+      window.removeEventListener('focus', updateHistory)
+      window.removeEventListener('hashchange', updateRoute)
+    }
   }, [])
-  const client = useMemo(
-    () =>
-      new GitHubApiClient({
-        token: token || undefined,
-        onRateLimit: (snapshot) =>
-          setRates((current) => ({ ...current, [snapshot.source]: snapshot })),
-      }),
-    [token],
-  )
-  const changeToken = (next: string) => {
-    void queryClient.cancelQueries()
-    queryClient.clear()
-    setRates({})
-    setToken(next)
+  const openExploration = (target: string) => {
+    if (!openExplorationTab(target)) go(target)
   }
+  const recent = history.length
+    ? history
+        .filter(
+          (entry, index) =>
+            history.findIndex((other) => other.target === entry.target) ===
+            index,
+        )
+        .slice(0, 4)
+    : (status.data?.recent ?? []).slice(0, 4)
   const submit = (value: string) => {
     if (GITHUB_TOKEN_REGEX.test(value.trim())) {
       setSearch('')
-      setError('That looks like a token. Add it in GitHub connection.')
-      setSettings(true)
+      setError(
+        'No personal token needed. Enter an organization or repository instead.',
+      )
       return
     }
     const parsed = parseSearchTarget(value)
@@ -77,7 +80,7 @@ export default function App() {
       return
     }
     setError('')
-    go(
+    openExploration(
       parsed.type === 'repo'
         ? `${parsed.value.owner}/${parsed.value.repo}`
         : parsed.value.org,
@@ -110,54 +113,35 @@ export default function App() {
           <a className={route === 'saved' ? 'nav-active' : ''} href="#/saved">
             Saved explorations
           </a>
-          <button
-            className="connection ghost"
-            onClick={() => setSettings((v) => !v)}
-            aria-expanded={settings}
-          >
-            <i className={token ? 'connected' : ''} />
-            {token ? 'Token added' : 'Connect GitHub'}
-          </button>
+          <span className="connection">
+            <i className={status.data?.configured ? 'connected' : ''} />
+            Shared library · {status.data?.cachedExplorations ?? '…'}{' '}
+            explorations
+          </span>
         </nav>
       </header>
-      {settings && (
-        <section className="settings-layout">
-          <TokenInput
-            token={token}
-            onTokenChange={changeToken}
-            onClearToken={() => changeToken('')}
-          />
-          <RateLimitIndicator
-            restRateLimit={rates.rest}
-            graphRateLimit={rates.graphql}
-            isAuthenticated={!!token}
-          />
-          <button
-            className="ghost close-settings"
-            onClick={() => setSettings(false)}
-          >
-            Close settings ×
-          </button>
-        </section>
-      )}
       <main id="main-content" tabIndex={-1}>
         {!route ? (
           <>
-            <section className="hero">
+            {
+              <section className="connected-overview">
+                <div>
+                  <p className="eyebrow">YOUR EXPLORATION DESK</p>
+                  <h1>Where will you contribute next?</h1>
+                  <p>
+                    Explore once, learn together. Shared snapshots save
+                    everyone’s GitHub requests.
+                  </p>
+                </div>
+                <RateLimitIndicator
+                  restRateLimit={status.data?.rates.rest}
+                  graphRateLimit={status.data?.rates.graphql}
+                  isAuthenticated={!!status.data?.configured}
+                />
+              </section>
+            }
+            <section className="hero hero-connected">
               <div className="hero-copy">
-                <p className="eyebrow">
-                  <span /> YOUR NEXT CONTRIBUTION STARTS HERE
-                </p>
-                <h1>
-                  Find your people.
-                  <br />
-                  Make your <em>first pull request.</em>
-                </h1>
-                <p className="hero-description">
-                  Explore the communities behind the code. Find active projects,
-                  understand how they work, and discover a place to learn and
-                  grow.
-                </p>
                 <form
                   className="discovery-search"
                   onSubmit={(event) => {
@@ -185,37 +169,77 @@ export default function App() {
                   </div>
                 </form>
                 <p className="search-note">
-                  Public repositories · Saved on this device · Your token stays
-                  in memory
+                  Opens in a new tab · Shared cached activity · No GitHub token
+                  needed.{' '}
+                  <a
+                    href="#/demo"
+                    onClick={(event) => {
+                      event.preventDefault()
+                      openExploration('demo')
+                    }}
+                  >
+                    Try the sample tour ↗
+                  </a>
                 </p>
               </div>
-              <aside className="field-note">
-                <span className="note-number">FIELD NOTE / 001</span>
-                <div className="orbit" aria-hidden="true">
-                  <span>+</span>
-                  <span>↗</span>
-                  <span>⌘</span>
-                  <b>✳</b>
-                </div>
-                <h2>
-                  Big impact.
-                  <br />
-                  Small beginnings.
-                </h2>
-                <p>
-                  A useful bug report, a clearer sentence, a first fix. Every
-                  contribution counts.
-                </p>
-                <a href="#/demo">
-                  Take a sample tour <span>↗</span>
-                </a>
-              </aside>
             </section>
+            {status.error && (
+              <p className="notice">
+                The shared library is temporarily unavailable. You can still
+                take the <a href="#/demo">sample tour</a>.
+              </p>
+            )}
             {error && (
               <p className="notice" role="alert">
                 {error}
               </p>
             )}
+            {
+              <section className="recent-explorations">
+                <header className="section-heading">
+                  <div>
+                    <p className="eyebrow">PICK UP WHERE YOU LEFT OFF</p>
+                    <h2>
+                      {history.length
+                        ? 'Recently explored'
+                        : 'From the shared library'}
+                    </h2>
+                  </div>
+                  <a href="#/saved">View your history →</a>
+                </header>
+                {recent.length ? (
+                  <div className="recent-grid">
+                    {recent.map((entry) => (
+                      <a
+                        key={entry.target}
+                        href={`#/${entry.target}`}
+                        target="_blank"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          openExploration(entry.target)
+                        }}
+                      >
+                        <span className="eyebrow">
+                          {entry.kind === 'repo'
+                            ? 'REPOSITORY'
+                            : 'ORGANIZATION'}
+                        </span>
+                        <h3>{entry.target} ↗</h3>
+                        <p>
+                          Explored{' '}
+                          {new Date(entry.fetchedAt).toLocaleDateString()}
+                        </p>
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="subtle">
+                    Your explorations will appear here. Search above or choose a
+                    suggestion below.
+                  </p>
+                )}
+              </section>
+            }
             <section className="discovery-section">
               <header className="section-heading">
                 <div>
@@ -251,7 +275,16 @@ export default function App() {
                     '>_',
                   ],
                 ].map(([n, org, title, description, tag, icon]) => (
-                  <a className="ecosystem-card" key={org} href={`#/${org}`}>
+                  <a
+                    className="ecosystem-card"
+                    key={org}
+                    href={`#/${org}`}
+                    target="_blank"
+                    onClick={(event) => {
+                      event.preventDefault()
+                      openExploration(org)
+                    }}
+                  >
                     <div className="ecosystem-top">
                       <span>{n}</span>
                       <span>{icon}</span>
@@ -301,14 +334,9 @@ export default function App() {
             </section>
           </>
         ) : route === 'saved' ? (
-          <SavedPage />
+          <SavedPage onOpen={openExploration} />
         ) : (
-          <ExplorePage
-            key={route + String(!!token)}
-            route={route}
-            client={client}
-            onConnect={() => setSettings(true)}
-          />
+          <ExplorePage key={route} route={route} onOpen={openExploration} />
         )}
       </main>
       <footer>
@@ -322,7 +350,7 @@ export default function App() {
   )
 }
 
-function SavedPage() {
+function SavedPage({ onOpen }: { onOpen: (target: string) => void }) {
   const [history, setHistory] = useState(listSearchHistory)
   const queryClient = useQueryClient()
   const seen = new Set<string>()
@@ -345,17 +373,25 @@ function SavedPage() {
             setHistory([])
           }}
         >
-          Clear saved data
+          Clear my history
         </button>
       </div>
       <p className="subtle">
-        Snapshots live in this browser. Open one without making another GitHub
-        request.
+        Your history stays on this device. Activity comes from the shared
+        database; clearing history does not delete community snapshots.
       </p>
       {unique.length ? (
         <div className="saved-list">
           {unique.map((entry) => (
-            <a key={entry.target} href={`#/${entry.target}`}>
+            <a
+              key={entry.target}
+              href={`#/${entry.target}`}
+              target="_blank"
+              onClick={(event) => {
+                event.preventDefault()
+                onOpen(entry.target)
+              }}
+            >
               <span>
                 <small>
                   {entry.kind === 'repo' ? 'REPOSITORY' : 'ORGANIZATION'}
@@ -385,85 +421,39 @@ function SavedPage() {
 
 function ExplorePage({
   route,
-  client,
-  onConnect,
+  onOpen,
 }: {
   route: string
-  client: GitHubApiClient
-  onConnect: () => void
+  onOpen: (target: string) => void
 }) {
   const target = parseSearchTarget(route)
   const isRepo = target?.type === 'repo'
   const isDemo = route === 'demo'
   const [showForks, setShowForks] = useState(false)
-  const [storageWarning, setStorageWarning] = useState('')
-  const [saved] = useState(() =>
-    isRepo
-      ? getLatestRepoVersion(target.value.owner, target.value.repo)
-      : getLatestOrgVersion(route),
-  )
+  const refreshRequested = useRef(false)
+  const queryClient = useQueryClient()
   const query = useQuery({
-    queryKey: ['exploration', route, client.isAuthenticated],
-    enabled: !isDemo && !!target && client.isAuthenticated && !saved,
-    initialData: saved,
-    staleTime: Infinity,
+    queryKey: ['exploration', route],
+    enabled: !isDemo && !!target,
+    staleTime: 60000,
+    retry: false,
     queryFn: async ({ signal }) => {
-      const authenticated = client.isAuthenticated
-      let data
-      if (isRepo) {
-        const bundle = await client.fetchRepositoryBundle(
-          target.value.owner,
-          target.value.repo,
-          { signal },
-        )
-        const persisted = saveRepoVersion({
-          owner: target.value.owner,
-          repo: target.value.repo,
-          authenticated,
-          bundle,
-        })
-        data = persisted ?? {
-          id: '',
-          kind: 'repo' as const,
-          owner: target.value.owner,
-          repo: target.value.repo,
-          target: route,
-          fetchedAt: bundle.fetchedAt,
-          authenticated,
-          bundle,
-        }
-      } else {
-        const repos = await client.fetchOrganizationRepositoriesAll(route, {
-          signal,
-        })
-        const persisted = saveOrgVersion({ org: route, authenticated, repos })
-        data = persisted ?? {
-          id: '',
-          kind: 'org' as const,
-          org: route,
-          target: route,
-          fetchedAt: new Date().toISOString(),
-          authenticated,
-          repos,
-        }
-      }
-      setStorageWarning(
-        data.id
-          ? ''
-          : 'Activity loaded, but this browser could not save it. Free local storage to keep it for later.',
-      )
-      if (data.id)
-        appendSearchHistory({
-          kind: data.kind,
-          target: data.target,
-          snapshotId: data.id,
-          fetchedAt: data.fetchedAt,
-          searchedAt: data.fetchedAt,
-          source: 'network',
-        })
-      return data
+      const refresh = refreshRequested.current
+      refreshRequested.current = false
+      const result = await fetchExploration(route, signal, refresh)
+      const data = result.data
+      appendSearchHistory({
+        kind: data.kind,
+        target: data.target,
+        snapshotId: data.id,
+        fetchedAt: data.fetchedAt,
+        source: 'network',
+      })
+      void queryClient.invalidateQueries({ queryKey: ['library-status'] })
+      return result
     },
   })
+  const data = query.data?.data
   if (!target && !isDemo)
     return (
       <div className="empty-state">
@@ -490,37 +480,34 @@ function ExplorePage({
           <button
             className="ghost"
             disabled={query.isFetching}
-            onClick={() =>
-              client.isAuthenticated ? void query.refetch() : onConnect()
-            }
+            onClick={() => {
+              refreshRequested.current = true
+              void query.refetch()
+            }}
           >
-            {query.isFetching ? 'Fetching activity…' : 'Refresh from GitHub ↻'}
+            {query.isFetching ? 'Fetching activity…' : 'Refresh activity ↻'}
           </button>
         )}
       </div>
-      {!isDemo && query.data && (
+      {!isDemo && data && (
         <p className="freshness">
-          {query.data.id ? 'Saved on this device' : 'Not saved'} · Fetched{' '}
-          {new Date(query.data.fetchedAt).toLocaleString()} · Refresh when you
-          need current activity.
+          {query.data?.source === 'github'
+            ? 'Freshly fetched and saved to the shared library'
+            : query.data?.source === 'stale'
+              ? 'Last saved shared snapshot'
+              : 'Loaded from the shared database · no GitHub fetch needed'}{' '}
+          · Fetched {new Date(data.fetchedAt).toLocaleString()}. Automatic
+          refresh after {new Date(query.data!.expiresAt).toLocaleString()}.
+          Manual refresh available after{' '}
+          {new Date(query.data!.refreshAfter).toLocaleTimeString()}.
         </p>
       )}
-      {storageWarning && <p className="notice">{storageWarning}</p>}
+      {query.data?.warning && <p className="notice">{query.data.warning}</p>}
       {query.error && (
-        <p className="notice" role="alert">
-          {toUserMessage(query.error, { target: route })}
-        </p>
-      )}
-      {!isDemo && !query.data && !client.isAuthenticated && (
-        <div className="empty-state">
-          <span>↗</span>
-          <h1>Get to know {route}.</h1>
-          <p>
-            Connect GitHub to fetch community activity. A read-only token is
-            required for GitHub’s GraphQL API.
-          </p>
-          <button onClick={onConnect}>Connect GitHub</button>
-          <a href="#/demo">Or explore the sample first →</a>
+        <div className="notice" role="alert">
+          <p>{toUserMessage(query.error, { target: route })}</p>
+          <a href="#/">Back to explorations</a> ·{' '}
+          <a href="#/demo">Try the sample tour</a>
         </div>
       )}
       {query.isFetching && !query.data && (
@@ -528,26 +515,24 @@ function ExplorePage({
           <div className="loading-bar" />
           <h2>Listening for the buzz…</h2>
           <p>
-            Collecting all issue and PR pages for the past three months. Busy
-            projects can take longer. GitHub may take a moment to prepare
-            statistics.
+            Checking the shared library, then collecting any needed GitHub
+            activity for the past three months. Busy projects can take longer.
+            GitHub may take a moment to prepare statistics.
           </p>
         </div>
       )}
-      {(isRepo || isDemo) && (query.data?.kind === 'repo' || isDemo) && (
+      {(isRepo || isDemo) && (data?.kind === 'repo' || isDemo) && (
         <Suspense fallback={<p role="status">Opening field notes…</p>}>
           <RepositoryPage
-            bundle={query.data?.kind === 'repo' ? query.data.bundle : undefined}
+            bundle={data?.kind === 'repo' ? data.bundle : undefined}
           />
         </Suspense>
       )}
-      {!isRepo && !isDemo && query.data?.kind === 'org' && (
+      {!isRepo && !isDemo && data?.kind === 'org' && (
         <OrgView
           orgName={route}
           repos={
-            showForks
-              ? query.data.repos
-              : query.data.repos.filter((repo) => !repo.isFork)
+            showForks ? data.repos : data.repos.filter((repo) => !repo.isFork)
           }
           loading={false}
           fetching={query.isFetching}
@@ -555,7 +540,7 @@ function ExplorePage({
           showForks={showForks}
           onToggleForks={setShowForks}
           selectedRepo={null}
-          onSelectRepo={(repo) => go(repo.nameWithOwner)}
+          onSelectRepo={(repo) => onOpen(repo.nameWithOwner)}
         />
       )}
     </section>

@@ -24,3 +24,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Shared SQLite cache and local owner configuration
+/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+!.env.example

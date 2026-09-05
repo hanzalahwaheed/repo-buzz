@@ -276,20 +276,6 @@ function normalizeActor(
   }
 }
 
-function sanitizeContributorStats(
-  contributors: ContributorStat[],
-): ContributorStat[] {
-  return contributors.map((contributor) => ({
-    author: contributor.author,
-    weeks: contributor.weeks.map((week) => ({
-      w: week.w,
-      a: week.a,
-      d: week.d,
-      c: week.c,
-    })),
-  }))
-}
-
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -530,7 +516,9 @@ export class GitHubApiClient {
     return Boolean(this.token)
   }
 
-  private buildHeaders(additional: HeadersInit = {}): Headers {
+  private buildHeaders(
+    additional: ConstructorParameters<typeof Headers>[0] = {},
+  ): Headers {
     const headers = new Headers(additional)
 
     headers.set('Accept', 'application/vnd.github+json')
@@ -720,6 +708,29 @@ export class GitHubApiClient {
     }
 
     return payload.data
+  }
+
+  async fetchRateLimits(signal?: AbortSignal): Promise<void> {
+    const response = await this.restRequest<{
+      resources: Record<
+        string,
+        { limit: number; remaining: number; reset: number; used: number }
+      >
+    }>('/rate_limit', { signal })
+    for (const [key, source] of [
+      ['core', 'rest'],
+      ['graphql', 'graphql'],
+    ] as const) {
+      const rate = response.data?.resources[key]
+      if (rate)
+        this.onRateLimit?.({
+          source,
+          limit: rate.limit,
+          remaining: rate.remaining,
+          used: rate.used,
+          resetAt: new Date(rate.reset * 1000).toISOString(),
+        })
+    }
   }
 
   async fetchOrganizationRepositoriesAll(
@@ -1020,105 +1031,41 @@ export class GitHubApiClient {
     signal?: AbortSignal,
     window = threeMonthWindow(new Date().toISOString()),
   ): Promise<RepositoryStatsBundle> {
-    const [participation, commitActivity, contributors, codeFrequency] =
-      await Promise.all([
-        this.fetchStatsEndpoint<{ all: number[]; owner: number[] }>(
-          owner,
-          repo,
-          'participation',
-          {
-            all: [],
-            owner: [],
-          },
-          signal,
-        ),
-        this.fetchStatsEndpoint<CommitActivityWeek[]>(
-          owner,
-          repo,
-          'commit_activity',
-          [],
-          signal,
-        ),
-        this.fetchStatsEndpoint<ContributorStat[]>(
-          owner,
-          repo,
-          'contributors',
-          [],
-          signal,
-        ),
-        this.fetchStatsEndpoint<Array<[number, number, number]>>(
-          owner,
-          repo,
-          'code_frequency',
-          [],
-          signal,
-        ),
-      ])
-
-    let commitActivityData = commitActivity.data
-    let contributorsData = sanitizeContributorStats(contributors.data)
+    // Issue/PR authors power the community view; only commit statistics are used.
+    const activity = await this.fetchStatsEndpoint<CommitActivityWeek[]>(
+      owner,
+      repo,
+      'commit_activity',
+      [],
+      signal,
+    )
+    let commitActivity = activity.data
     const fallbackMessages: string[] = []
-
-    const hasCommitLimitUnavailable = [
-      participation,
-      commitActivity,
-      contributors,
-      codeFrequency,
-    ].some((result) => result.unavailableReason === 'commit_limit')
-
-    if (hasCommitLimitUnavailable) {
+    if (activity.unavailableReason) {
       try {
-        const recentCommitFallback = await this.fetchRecentCommitFallback(
-          owner,
-          repo,
-          signal,
-          window,
-        )
-
-        if (commitActivity.unavailableReason === 'commit_limit') {
-          commitActivityData = recentCommitFallback.commitActivity
-        }
-
-        if (contributors.unavailableReason === 'commit_limit') {
-          contributorsData = sanitizeContributorStats(
-            recentCommitFallback.contributors,
-          )
-        }
-
+        commitActivity = (
+          await this.fetchRecentCommitFallback(owner, repo, signal, window)
+        ).commitActivity
         fallbackMessages.push(
-          'Some GitHub statistics are unavailable. Three-month commit history was fetched as a fallback; it includes merge commits and uses author dates.',
+          'GitHub commit statistics are unavailable. Three-month commit history was fetched as a fallback; it includes merge commits and uses author dates.',
         )
       } catch (error) {
         if (signal?.aborted) throw error
         fallbackMessages.push(
-          'GitHub stats endpoints are unavailable for this repository, and three-month commit fallback data could not be loaded.',
+          'GitHub commit statistics and three-month commit fallback could not be loaded.',
         )
       }
     }
-
-    const unavailableEndpoints: string[] = [
-      ...(participation.unavailableReason ? ['participation'] : []),
-      ...(codeFrequency.unavailableReason ? ['code_frequency'] : []),
-      ...(commitActivity.unavailableReason && commitActivityData.length === 0
-        ? ['commit_activity']
-        : []),
-      ...(contributors.unavailableReason && contributorsData.length === 0
-        ? ['contributors']
-        : []),
-    ]
-
     return {
-      participation: participation.data,
-      commitActivity: commitActivityData,
-      contributors: contributorsData,
-      codeFrequency: codeFrequency.data,
-      pendingEndpoints: [
-        ...(participation.pending ? ['participation'] : []),
-        ...(commitActivity.pending ? ['commit_activity'] : []),
-        ...(contributors.pending ? ['contributors'] : []),
-        ...(codeFrequency.pending ? ['code_frequency'] : []),
-      ],
-      unavailableEndpoints,
+      participation: { all: [], owner: [] },
+      commitActivity,
+      contributors: [],
+      codeFrequency: [],
+      pendingEndpoints: activity.pending ? ['commit_activity'] : [],
+      unavailableEndpoints:
+        activity.unavailableReason && !commitActivity.length
+          ? ['commit_activity']
+          : [],
       fallbackMessages,
     }
   }

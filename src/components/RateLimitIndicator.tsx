@@ -26,7 +26,7 @@ function renderRateLimitCard(title: string, snapshot?: RateLimitSnapshot) {
     return (
       <article className="rate-card">
         <h3>{title}</h3>
-        <p className="value">No calls yet</p>
+        <p className="value">Not available yet</p>
       </article>
     )
   }
@@ -68,7 +68,7 @@ export function RateLimitIndicator({
   return (
     <section className="panel">
       <header className="panel-header">
-        <h2>Rate limits</h2>
+        <h2>Shared GitHub limits</h2>
       </header>
 
       <div className="rate-grid">
@@ -78,8 +78,8 @@ export function RateLimitIndicator({
 
       {!isAuthenticated ? (
         <p className="warning">
-          Connect GitHub to fetch activity. Saved explorations and the sample
-          tour work without a token.
+          Live refresh is not available yet. Existing library entries and the
+          sample tour remain accessible.
         </p>
       ) : null}
     </section>

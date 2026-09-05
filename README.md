@@ -2,63 +2,94 @@
 
 **Find your people. Make your first pull request.**
 
-An open-source field guide for developers looking for a community where they can contribute, learn, and grow. Explore an organization, narrow its repositories by language and activity, and open a dedicated repository page to understand the signals behind the code.
+A field guide for new open-source contributors. Discover organizations, inspect three months of activity, and find a community where you can learn and grow.
 
-## Run locally
+## Start locally
 
-Requires Node.js 22.12+ (or a compatible newer version).
+Requires **Node.js 22.13+**; Node 24 LTS is recommended. SQLite uses Node’s built-in `node:sqlite` module.
 
 ```sh
 npm install
+cp .env.example .env
+# Set GITHUB_TOKEN in .env (server-side only), then:
 npm run dev
 ```
 
+The app runs at `http://localhost:5173`. The shared API runs at `http://127.0.0.1:3001`, proxied through Vite so browser requests stay on the app’s origin. The SQLite database is created automatically at `data/repobuzz.sqlite`.
+
+The site owner configures one fine-grained GitHub token with public repository access and no write permissions. **Visitors never provide a token.** Restart the API after changing `.env`. Without the owner token, the sample tour and existing database entries remain available; uncached requests explain that the shared connection needs configuration.
+
 ```sh
-npm test       # data correctness, persistence, input validation, and mocked API regressions
+npm test        # analytics, pagination, real SQLite persistence, shared caching, HTTP API
 npm run lint
 npm run build
-npm run preview
+npm start       # API and built frontend together, default port 3001
 ```
 
-## Explore
+`npm run dev:web` and `npm run dev:api` can also run separately. `npm run preview` previews the built frontend and still requires the API process.
 
-- Enter a GitHub organization, `owner/repository`, or GitHub URL.
-- Connect a fine-grained GitHub token with public repository access; no write permissions are required. Live GraphQL queries require authentication.
-- Filter an organization by project name or language; archived projects and forks are hidden by default.
-- Open a repository to see issue and PR activity, merge times, commit history, contributor activity, and links to beginner-friendly issues.
-- Reopen **Saved explorations** without requesting the data again. Use **Refresh from GitHub** to update the snapshot.
-- Try **Take a sample tour** without a token. `fieldnotes/garden` is an explicitly fictional, deterministic example, never saved as real GitHub data.
+## Experience
 
-## Product and design
+- The homepage is an exploration desk: shared GitHub limits, recent explorations, and suggested communities. There is no visitor token form.
+- Searches, suggestions, saved explorations, and organization repository selections open a new tab immediately. The new tab fetches from the shared API. If the browser blocks the tab, the current tab opens the exploration instead.
+- Personal exploration history stays in local storage. Public activity is stored in the shared database. Clearing personal history does not remove shared data.
+- The **sample tour** is a clearly labeled fictional dataset and is never inserted into the shared database.
+- Repository pages show the data source, original fetch date, and refresh availability. The layout supports mobile, keyboard navigation, reduced motion, and chart data-table alternatives.
 
-The interface uses a warm paper-and-sage palette, editorial serif headings, restrained charts, and a field-notes motif. It prioritizes questions new contributors can act on: where to start, whether changes get merged, and who participates. It intentionally avoids presenting a composite health score as a verdict on community quality.
+## Shared database and request savings
 
-Repository pages use hash URLs (`#/owner/repository`) with browser Back/Forward support. This works on static hosting without server rewrite rules. The chart code loads only when opening a repository or the sample tour. Charts include readable data-table alternatives for a fixed three-month period; the layout adapts to mobile and respects reduced-motion preferences.
+`server/database.ts` owns SQLite access. It creates:
 
-## Accuracy and limitations
+- `organizations`: one row per normalized GitHub login, including repository-list JSON and fetch timestamp.
+- `repositories`: one row per normalized `owner/repository`, including the complete analysis bundle and fetch timestamp, indexed by owner.
 
-- Analysis covers the previous **three calendar months in UTC**, ending when fetching starts, with the exact dates displayed. Month-end subtraction is clamped (May 31 → February 28/29).
-- Issue and PR connections are paginated in update-date order until the cutoff, without a 100-item or 1,000-search-result cap. Older items merged or closed during the period are included. Duplicate IDs are removed. Failed continuation requests reject the new bundle; incomplete issue/PR data is not saved as complete.
-- Charts count creation, latest closure, and merge timestamps inside the period. Repeated close/reopen cycles are not a complete historical event log. GitHub can change while pagination is in progress.
-- Merge rate is PRs merged during the period divided by PRs merged or closed without merge during the period. Median merge time uses creation-to-merge duration for that period’s merged PRs, including old PRs. This is not first-response time. Low resolved-PR counts receive a visible caution.
-- Bot filtering applies consistently to issue/PR charts, period metrics, and participant counts. Participant counts cover authors of issues opened and PRs opened/merged, not all commenters/reviewers. Stars and available beginner-issue counts remain current repository totals.
-- Commit charts clip GitHub daily statistics to the period (boundary days may be partial). Pending/unavailable statistics remain disclosed. The fallback follows commit pages across the same three-month range, and explicitly notes its different merge-commit/author-date semantics.
-- Saved analyses keep their original date window. Old 100-item snapshots require an explicit refresh before showing the new analysis.
-- Good-first-issue and help-wanted counts are separate: labels may overlap and are not added together.
-- Activity is context, not a promise of maintainer responsiveness or a welcoming community.
+Primary keys are case insensitive. Inserts use parameterized statements; later fetches **upsert the same row**, rather than append duplicate records. The payload schema version prevents incompatible cache formats from being reused. WAL mode supports concurrent reads while updates are committed.
 
-References: [GitHub repository statistics](https://docs.github.com/en/rest/metrics/statistics), [personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+`server/library.ts` checks this database before GitHub:
 
-## Privacy and persistence
+1. **Fresh row:** serve it immediately without fetching activity from GitHub.
+2. **Missing or expired row:** fetch complete activity, upsert the row, then serve the persisted result.
+3. **Simultaneous requests:** one in-flight fetch per target is shared across visitors.
+4. **Refresh failure:** preserve the old row and return it with an explicit stale warning. Failed first-time fetches never create a complete-looking snapshot. Detected removed/private repositories are evicted instead of served stale.
 
-Tokens are held in React state only, cleared from the input after connecting, and sent directly to `https://api.github.com`. They are never written to local/session storage, query keys, or URLs. Disconnect cancels active queries and clears the query cache; request ETag caches are scoped to their API client instance. Reloading requires reconnecting.
+Defaults are a **6-hour cache lifetime** and **5-minute manual-refresh cooldown**. Both are configurable in `.env`. An upstream refresh has a five-minute timeout. Two different explorations can fetch concurrently; the queue is bounded. A per-process hourly budget permits 50 upstream explorations globally and 10 per client address, while cached reads remain available. Repeated failed targets back off for one minute. Server restarts reset these in-memory protections; run one API instance with this SQLite configuration. Requests behind a reverse proxy share its client-address budget unless trusted-proxy handling is added deliberately.
 
-The app queries public organization repositories and rejects private repository details. Public activity snapshots and search history are stored in versioned local-storage keys, bounded to 35 repository versions, 20 organization versions, and 200 history entries. Existing v1 snapshots remain readable. Invalid records and unavailable storage are handled defensively. If a save fails, fetched activity still displays with a warning. Saved explorations can be cleared from the app.
+The server retrieves only the commit statistics used by the UI, avoiding unused participation, code-frequency, and contributor-statistics requests. Rate-limit status is cached for five minutes independently of activity.
 
-Local storage is device-local, not encrypted or synchronized. Any script running on this origin has the same browser-level access. For an OAuth-based hosted product, use a backend with secure, HttpOnly session cookies; do not persist access tokens in browser storage.
+## Analysis window and limits
 
-## Stack and verification
+- Analysis covers the preceding **three calendar months in UTC**, ending at fetch start. Month-end subtraction is clamped. Saved results retain that window until refreshed.
+- Issues and PRs are paginated by update date until the cutoff, with no 100-item or search-result cap. Older items closed or merged inside the period are included. Failed continuation pages reject the new bundle.
+- Charts count creation, latest closure, and merge timestamps within the period. Repeated close/reopen cycles are not a full event log, and GitHub data can change during pagination.
+- Merge rate is merged PRs divided by all PRs resolved in the period. Median merge time is creation-to-merge duration for those merged PRs, not first-response time. Low-volume results carry a caution.
+- Bot filtering applies consistently to issue/PR metrics and participants. Participants are authors of issues opened and PRs opened/merged, not all reviewers or commenters. Current stars and beginner-issue counts retain their original scope.
+- Commit statistics use default-branch daily buckets; boundary days can be partial. A disclosed fallback can use paginated three-month commit history with different merge-commit and author-date semantics.
+- Activity is evidence to investigate, not a verdict on community quality.
 
-React 19, TypeScript, Vite, TanStack Query, Recharts. Regression tests run with Node’s test runner and Vite’s module loader, with mocked GitHub responses and storage. They cover merge-rate arithmetic, snapshot stability, bot filtering, search validation, persistence and quota failures, organization pagination, invalid API responses, and rejection of private repositories.
+## Deploy as one shared service
 
-Live authenticated GitHub fetching requires a user-supplied token; the sample tour and mocked API tests do not verify a particular account’s permissions.
+Build the frontend and run `npm start` on a Node server with persistent storage. Set `HOST=0.0.0.0` when required by your host, and route traffic to `PORT`. Keep `GITHUB_TOKEN` in your host’s secret environment configuration, never in a `VITE_` variable.
+
+A Docker recipe is included:
+
+```sh
+docker build -t repobuzz .
+docker run --env-file .env -e HOST=0.0.0.0 -e DATABASE_PATH=/data/repobuzz.sqlite \
+  -p 3001:3001 -v repobuzz-data:/data repobuzz
+```
+
+Use a persistent disk/volume and back up the database with a SQLite-aware backup tool. An ephemeral filesystem loses the shared cache across restarts. This is a single-service SQLite design, not a distributed/serverless database. `ExplorationDatabase` is the narrow persistence boundary to replace with Neon/Postgres if deploying multiple API replicas later.
+
+The server serves static files only from `dist`; `.env`, source, and database files are not exposed. Visitors cannot upload arbitrary snapshots or supply a GitHub token to the API. Public data is shared across users; no private repositories are intentionally cached. A previously public repository can remain cached until revalidation discovers an access change.
+
+## API
+
+- `GET /api/status`: cache count, recent shared entries, connection availability, and cached API limits. Never returns credentials.
+- `GET /api/explorations?target=owner/repo`: read-through cached exploration (organization names also accepted).
+- `POST /api/explorations?target=owner/repo`: refresh subject to cooldown, with `Content-Type: application/json`. No request body is needed. Cross-site browser requests are rejected.
+
+## Verification
+
+Tests use real temporary SQLite databases and mocked GitHub responses. They cover date boundaries, pagination beyond 100 items, bot filtering, cache hits across visitors, concurrency deduplication, refresh/cooldown behavior, stale fallback, private-data eviction, persistence across reopening, request budgets, and the HTTP interface. Live GitHub verification requires the owner’s server token.
+
+References: [Node SQLite](https://nodejs.org/api/sqlite.html), [GitHub pagination](https://docs.github.com/en/graphql/guides/using-pagination-in-the-graphql-api), [GitHub statistics](https://docs.github.com/en/rest/metrics/statistics).
