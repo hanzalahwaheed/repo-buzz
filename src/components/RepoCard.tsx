@@ -12,14 +12,17 @@ function daysSince(date: string): number {
     return 999
   }
 
-  return Math.max(0, Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24)))
+  return Math.max(
+    0,
+    Math.floor((Date.now() - timestamp) / (1000 * 60 * 60 * 24)),
+  )
 }
 
 function activityLabel(days: number): string {
-  if (days <= 2) {
+  if (days <= 7) {
     return 'Active this week'
   }
-  if (days <= 7) {
+  if (days <= 30) {
     return 'Active this month'
   }
   if (days <= 30) {
@@ -36,7 +39,9 @@ export function RepoCard({ repo, selected, onSelect }: RepoCardProps) {
     <article className={`repo-card ${selected ? 'selected' : ''}`}>
       <div className="repo-card-head">
         <h3>{repo.nameWithOwner}</h3>
-        <span className="pill">{activityLabel(days)}</span>
+        <span className="pill">
+          {repo.isArchived ? 'Archived' : activityLabel(days)}
+        </span>
       </div>
 
       <p className="repo-description">
@@ -46,7 +51,9 @@ export function RepoCard({ repo, selected, onSelect }: RepoCardProps) {
       <div className="badge-row">
         {repo.isFork ? <span className="tag">Fork</span> : null}
         {repo.isArchived ? <span className="tag">Archived</span> : null}
-        {repo.primaryLanguage ? <span className="tag">{repo.primaryLanguage}</span> : null}
+        {repo.primaryLanguage ? (
+          <span className="tag">{repo.primaryLanguage}</span>
+        ) : null}
       </div>
 
       <dl className="stat-grid">
@@ -69,7 +76,7 @@ export function RepoCard({ repo, selected, onSelect }: RepoCardProps) {
       </dl>
 
       <button type="button" onClick={() => onSelect(repo)}>
-        Deep dive
+        Explore repository ↗
       </button>
     </article>
   )

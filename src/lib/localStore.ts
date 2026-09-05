@@ -18,7 +18,11 @@ const MAX_ORG_VERSIONS = 20
 const MAX_HISTORY_ENTRIES = 200
 
 function hasStorage(): boolean {
-  return typeof window !== 'undefined' && Boolean(window.localStorage)
+  try {
+    return typeof window !== 'undefined' && Boolean(window.localStorage)
+  } catch {
+    return false
+  }
 }
 
 function makeId(prefix: string): string {
@@ -41,7 +45,45 @@ function readJsonArray<T>(key: string): T[] {
       return []
     }
 
-    return parsed as T[]
+    // Discard incomplete records from old or interrupted writes.
+    return parsed.filter((record) => {
+      if (
+        !record ||
+        typeof record !== 'object' ||
+        typeof record.id !== 'string' ||
+        typeof record.target !== 'string' ||
+        !Number.isFinite(Date.parse(record.fetchedAt))
+      )
+        return false
+      if (key === STORAGE_KEYS.repoVersions)
+        return (
+          typeof record.owner === 'string' &&
+          typeof record.repo === 'string' &&
+          record.bundle?.snapshot?.metadata &&
+          Array.isArray(record.bundle.snapshot.issues) &&
+          Array.isArray(record.bundle.snapshot.pullRequests) &&
+          Array.isArray(record.bundle.stats?.commitActivity) &&
+          Array.isArray(record.bundle.stats?.contributors) &&
+          Array.isArray(record.bundle.stats?.codeFrequency) &&
+          Array.isArray(record.bundle.stats?.pendingEndpoints) &&
+          Array.isArray(record.bundle.stats?.participation?.all) &&
+          Array.isArray(record.bundle.stats?.participation?.owner)
+        )
+      if (key === STORAGE_KEYS.orgVersions)
+        return (
+          typeof record.org === 'string' &&
+          Array.isArray(record.repos) &&
+          record.repos.every(
+            (repo: { nameWithOwner?: unknown }) =>
+              typeof repo?.nameWithOwner === 'string',
+          )
+        )
+      return (
+        typeof record.snapshotId === 'string' &&
+        Number.isFinite(Date.parse(record.searchedAt)) &&
+        ['repo', 'org'].includes(record.kind)
+      )
+    }) as T[]
   } catch {
     return []
   }
@@ -60,9 +102,14 @@ function writeJsonArray<T>(key: string, records: T[]): boolean {
   }
 }
 
-function sortDescByDate<T>(records: T[], dateGetter: (value: T) => string): T[] {
+function sortDescByDate<T>(
+  records: T[],
+  dateGetter: (value: T) => string,
+): T[] {
   return [...records].sort(
-    (left, right) => new Date(dateGetter(right)).getTime() - new Date(dateGetter(left)).getTime(),
+    (left, right) =>
+      new Date(dateGetter(right)).getTime() -
+      new Date(dateGetter(left)).getTime(),
   )
 }
 
@@ -84,7 +131,9 @@ export function saveRepoVersion(params: {
     bundle: params.bundle,
   }
 
-  const existing = readJsonArray<PersistedRepoVersion>(STORAGE_KEYS.repoVersions)
+  const existing = readJsonArray<PersistedRepoVersion>(
+    STORAGE_KEYS.repoVersions,
+  )
   const next = [record, ...existing].slice(0, MAX_REPO_VERSIONS)
 
   return writeJsonArray(STORAGE_KEYS.repoVersions, next) ? record : null
@@ -120,7 +169,9 @@ export function getLatestRepoVersion(
   const target = `${owner}/${repo}`
 
   const match = sortDescByDate(
-    records.filter((record) => record.target === target),
+    records.filter(
+      (record) => record.target.toLowerCase() === target.toLowerCase(),
+    ),
     (record) => record.fetchedAt,
   )[0]
 
@@ -130,7 +181,7 @@ export function getLatestRepoVersion(
 export function getLatestOrgVersion(org: string): PersistedOrgVersion | null {
   const records = readJsonArray<PersistedOrgVersion>(STORAGE_KEYS.orgVersions)
   const match = sortDescByDate(
-    records.filter((record) => record.org === org),
+    records.filter((record) => record.org.toLowerCase() === org.toLowerCase()),
     (record) => record.fetchedAt,
   )[0]
 
@@ -148,7 +199,9 @@ export function getOrgVersionById(id: string): PersistedOrgVersion | null {
 }
 
 export function listSearchHistory(): PersistedSearchHistoryEntry[] {
-  const records = readJsonArray<PersistedSearchHistoryEntry>(STORAGE_KEYS.history)
+  const records = readJsonArray<PersistedSearchHistoryEntry>(
+    STORAGE_KEYS.history,
+  )
   return sortDescByDate(records, (record) => record.searchedAt)
 }
 

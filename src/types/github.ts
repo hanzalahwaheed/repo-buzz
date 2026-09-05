@@ -1,3 +1,4 @@
+import type { AnalysisWindow } from '../lib/analysisWindow'
 export type RateLimitSource = 'rest' | 'graphql'
 
 export interface RateLimitSnapshot {
@@ -100,6 +101,7 @@ export interface RepositoryStatsBundle {
 }
 
 export interface RepositoryBundle {
+  analysisWindow?: AnalysisWindow
   snapshot: RepositorySnapshot
   stats: RepositoryStatsBundle
   fetchedAt: string
@@ -189,41 +191,29 @@ export interface HealthComponent {
 export interface RepoAnalytics {
   metadata: RepoMetadata
   issueMetrics: {
-    openCount: number
-    closeRate: number | null
-    medianTimeToCloseDays: number | null
-    staleCount: number
-    goodFirstIssueCount: number
-    helpWantedCount: number
+    openedCount: number
+    closedCount: number
     weeklyTrend: WeeklyIssueTrend[]
   }
   prMetrics: {
+    openedCount: number
+    mergedCount: number
+    resolvedCount: number
     mergeRate: number | null
     rejectionRate: number | null
     medianTimeToMergeDays: number | null
-    averageReviewsPerPr: number | null
     weeklyTrend: WeeklyPrTrend[]
   }
   contributorMetrics: {
-    uniqueContributors7d: number
-    uniqueContributors30d: number
-    uniqueContributors90d: number
-    newContributorsMonthly: MonthlyContributorTrend[]
-    concentrationTop3Pct: number | null
-    communityCommitRatio: number | null
-    topContributorsLast3Weeks: RecentContributorActivity[]
+    topContributors: Array<{
+      login: string
+      issuesOpened: number
+      prsOpened: number
+      totalMergedPrs: number
+      isMaintainer: boolean
+      activityUrl: string
+    }>
   }
-  commitMetrics: {
-    weeklyTrend: WeeklyCommitTrend[]
-    commitsLast30d: number
-    commitsPrevious30d: number
-  }
-  codeMetrics: {
-    weeklyChurn: WeeklyCodeChurn[]
-  }
-  healthScore: {
-    score: number | null
-    components: HealthComponent[]
-  }
+  commitMetrics: { weeklyTrend: WeeklyCommitTrend[] }
   warnings: string[]
 }

@@ -1,858 +1,563 @@
-import { useCallback, useMemo, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
-
-import { OrgView } from './components/OrgView'
-import { RateLimitIndicator } from './components/RateLimitIndicator'
-import { RepoDetailView } from './components/RepoDetailView'
-import { SearchBar } from './components/SearchBar'
-import { SearchHistory } from './components/SearchHistory'
-import { TokenInput } from './components/TokenInput'
-import {
-  parseSearchTarget,
-  useOrgRepositoriesQuery,
-  useRepositoryBundleQuery,
-  type RepoTarget,
-  type SearchTarget,
-} from './hooks/useRepoBuzzQueries'
-import { clearRepoBundleCache } from './lib/cache'
-import { toUserMessage } from './lib/githubError'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { GitHubApiClient } from './lib/githubApi'
+import { toUserMessage } from './lib/githubError'
+import { parseSearchTarget, GITHUB_TOKEN_REGEX } from './lib/search'
 import {
+  getLatestRepoVersion,
+  getLatestOrgVersion,
+  saveRepoVersion,
+  saveOrgVersion,
+  listSearchHistory,
   appendSearchHistory,
   clearAllPersistedData,
-  clearHistory,
-  getLatestOrgVersion,
-  getLatestRepoVersion,
-  getOrgVersionById,
-  getRepoVersionById,
-  listSearchHistory,
-  removeHistoryEntry,
-  saveOrgVersion,
-  saveRepoVersion,
 } from './lib/localStore'
-import { computeRepoAnalytics } from './lib/metrics'
-import type {
-  OrganizationRepoSummary,
-  RateLimitSnapshot,
-  RepositoryBundle,
-} from './types/github'
-import type {
-  PersistedOrgVersion,
-  PersistedRepoVersion,
-  PersistedSearchHistoryEntry,
-  SnapshotKind,
-} from './types/storage'
+import { TokenInput } from './components/TokenInput'
+import { OrgView } from './components/OrgView'
+import { RateLimitIndicator } from './components/RateLimitIndicator'
+import type { RateLimitSnapshot } from './types/github'
+const RepositoryPage = lazy(() => import('./components/RepositoryPage'))
 
-interface RateLimitState {
-  rest?: RateLimitSnapshot
-  graphql?: RateLimitSnapshot
-}
-
-type DataViewMode = 'network' | 'storage'
-
-interface InitialAppState {
-  searchInput: string
-  activeTarget: SearchTarget | null
-  selectedRepo: RepoTarget | null
-  storedOrgVersion: PersistedOrgVersion | null
-  storedRepoVersion: PersistedRepoVersion | null
-  dataViewMode: DataViewMode
-  message: string | null
-}
-
-function trimTrailingSlash(pathname: string): string {
-  if (pathname === '/') {
-    return pathname
-  }
-
-  return pathname.replace(/\/+$/, '')
-}
-
-function isSnapshotPath(pathname: string): boolean {
-  return /\/snapshot\/?$/.test(pathname)
-}
-
-function getDashboardPath(pathname: string): string {
-  const trimmed = trimTrailingSlash(pathname)
-  if (isSnapshotPath(trimmed)) {
-    const withoutSnapshot = trimmed.replace(/\/snapshot$/, '')
-    return withoutSnapshot === '' ? '/' : withoutSnapshot
-  }
-
-  return trimmed === '' ? '/' : trimmed
-}
-
-function getSnapshotPath(pathname: string): string {
-  const dashboardPath = getDashboardPath(pathname)
-  return dashboardPath === '/'
-    ? '/snapshot'
-    : `${dashboardPath}/snapshot`
-}
-
-function resolveRepoTarget(
-  target: SearchTarget | null,
-  selectedRepo: RepoTarget | null,
-): RepoTarget | null {
-  if (target?.type === 'repo') {
-    return target.value
-  }
-
-  return selectedRepo
-}
-
-function formatLocalDate(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return value
-  }
-
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
-function defaultInitialState(): InitialAppState {
-  return {
-    searchInput: '',
-    activeTarget: null,
-    selectedRepo: null,
-    storedOrgVersion: null,
-    storedRepoVersion: null,
-    dataViewMode: 'network',
-    message: null,
+function routeTarget() {
+  try {
+    return decodeURIComponent(window.location.hash.slice(1)).replace(/^\//, '')
+  } catch {
+    return 'invalid/route/value'
   }
 }
-
-function getInitialStateFromUrl(isSnapshotRoute: boolean): InitialAppState {
-  const initialState = defaultInitialState()
-
-  if (typeof window === 'undefined') {
-    return initialState
-  }
-
-  if (!isSnapshotRoute) {
-    return initialState
-  }
-
-  const params = new URLSearchParams(window.location.search)
-  const snapshotKind = params.get('snapshotKind')
-  const snapshotId = params.get('snapshotId')
-
-  if (!snapshotKind || !snapshotId) {
-    return initialState
-  }
-
-  if (snapshotKind === 'repo') {
-    const repoVersion = getRepoVersionById(snapshotId)
-    if (!repoVersion) {
-      return {
-        ...initialState,
-        message: 'Snapshot URL is stale. Saved repo version was not found in local storage.',
-      }
-    }
-
-    return {
-      searchInput: repoVersion.target,
-      activeTarget: {
-        type: 'repo',
-        value: {
-          owner: repoVersion.owner,
-          repo: repoVersion.repo,
-        },
-      },
-      selectedRepo: {
-        owner: repoVersion.owner,
-        repo: repoVersion.repo,
-      },
-      storedOrgVersion: null,
-      storedRepoVersion: repoVersion,
-      dataViewMode: 'storage',
-      message: `Loaded snapshot for ${repoVersion.target} from ${formatLocalDate(repoVersion.fetchedAt)}.`,
-    }
-  }
-
-  if (snapshotKind === 'org') {
-    const orgVersion = getOrgVersionById(snapshotId)
-    if (!orgVersion) {
-      return {
-        ...initialState,
-        message: 'Snapshot URL is stale. Saved org version was not found in local storage.',
-      }
-    }
-
-    return {
-      searchInput: orgVersion.org,
-      activeTarget: {
-        type: 'org',
-        value: {
-          org: orgVersion.org,
-        },
-      },
-      selectedRepo: null,
-      storedOrgVersion: orgVersion,
-      storedRepoVersion: null,
-      dataViewMode: 'storage',
-      message: `Loaded snapshot for ${orgVersion.org} from ${formatLocalDate(orgVersion.fetchedAt)}.`,
-    }
-  }
-
-  return {
-    ...initialState,
-    message: 'Snapshot URL is invalid. Open a snapshot again from search history.',
-  }
-}
-
-function clearSnapshotUrlParams(): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  const url = new URL(window.location.href)
-  const currentPath = trimTrailingSlash(url.pathname)
-  const dashboardPath = getDashboardPath(currentPath)
-  const hadSnapshotParams =
-    url.searchParams.has('snapshotKind') || url.searchParams.has('snapshotId')
-  const isOnSnapshotPath = isSnapshotPath(currentPath)
-
-  if (!hadSnapshotParams && !isOnSnapshotPath) {
-    return
-  }
-
-  url.searchParams.delete('snapshotKind')
-  url.searchParams.delete('snapshotId')
-  if (isOnSnapshotPath) {
-    url.pathname = dashboardPath
-  }
-  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
-}
-
-function buildSnapshotUrl(entry: PersistedSearchHistoryEntry): string {
-  if (typeof window === 'undefined') {
-    return ''
-  }
-
-  const url = new URL(window.location.href)
-  url.pathname = getSnapshotPath(url.pathname)
-  url.search = ''
-  url.searchParams.set('snapshotKind', entry.kind)
-  url.searchParams.set('snapshotId', entry.snapshotId)
-  return url.toString()
-}
-
-function replaceSnapshotUrlParams(kind: SnapshotKind, snapshotId: string): void {
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  const url = new URL(window.location.href)
-  url.pathname = getSnapshotPath(url.pathname)
-  url.searchParams.set('snapshotKind', kind)
-  url.searchParams.set('snapshotId', snapshotId)
-  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+function go(target: string) {
+  window.location.hash = `/${target}`
 }
 
 export default function App() {
-  const isSnapshotRoute = useMemo(
-    () =>
-      typeof window !== 'undefined' && isSnapshotPath(window.location.pathname),
-    [],
-  )
-  const dashboardPath = useMemo(
-    () =>
-      typeof window !== 'undefined'
-        ? getDashboardPath(window.location.pathname)
-        : '/',
-    [],
-  )
-  const initialState = useMemo(
-    () => getInitialStateFromUrl(isSnapshotRoute),
-    [isSnapshotRoute],
-  )
-
+  const [route, setRoute] = useState(routeTarget)
   const [token, setToken] = useState('')
-  const [searchInput, setSearchInput] = useState(initialState.searchInput)
-  const [activeTarget, setActiveTarget] = useState<SearchTarget | null>(
-    initialState.activeTarget,
-  )
-  const [selectedRepo, setSelectedRepo] = useState<RepoTarget | null>(
-    initialState.selectedRepo,
-  )
-  const [showForks, setShowForks] = useState(false)
-  const [includeBots, setIncludeBots] = useState(false)
-  const [excludeMaintainers, setExcludeMaintainers] = useState(false)
-  const [message, setMessage] = useState<string | null>(initialState.message)
-  const [rateLimits, setRateLimits] = useState<RateLimitState>({})
-  const [history, setHistory] = useState<PersistedSearchHistoryEntry[]>(() =>
-    listSearchHistory(),
-  )
-  const [storedOrgVersion, setStoredOrgVersion] = useState<PersistedOrgVersion | null>(
-    initialState.storedOrgVersion,
-  )
-  const [storedRepoVersion, setStoredRepoVersion] = useState<PersistedRepoVersion | null>(
-    initialState.storedRepoVersion,
-  )
-  const [dataViewMode, setDataViewMode] = useState<DataViewMode>(
-    initialState.dataViewMode,
-  )
-  const [isSnapshotSheetOpen, setIsSnapshotSheetOpen] = useState(false)
+  const [settings, setSettings] = useState(false)
+  const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
+  const [rates, setRates] = useState<{
+    rest?: RateLimitSnapshot
+    graphql?: RateLimitSnapshot
+  }>({})
   const queryClient = useQueryClient()
-
-  const handleRateLimitUpdate = useCallback((snapshot: RateLimitSnapshot) => {
-    setRateLimits((current) => ({
-      ...current,
-      [snapshot.source]: snapshot,
-    }))
+  useEffect(() => {
+    const update = () => {
+      setRoute(routeTarget())
+      setError('')
+      window.scrollTo(0, 0)
+    }
+    window.addEventListener('hashchange', update)
+    return () => window.removeEventListener('hashchange', update)
   }, [])
-
-  const apiClient = useMemo(
+  const client = useMemo(
     () =>
       new GitHubApiClient({
-        token: token.trim() || undefined,
-        onRateLimit: handleRateLimitUpdate,
+        token: token || undefined,
+        onRateLimit: (snapshot) =>
+          setRates((current) => ({ ...current, [snapshot.source]: snapshot })),
       }),
-    [handleRateLimitUpdate, token],
+    [token],
   )
-
-  const orgName = activeTarget?.type === 'org' ? activeTarget.value.org : null
-  const repoTarget = resolveRepoTarget(activeTarget, selectedRepo)
-
-  const handleOrgFetchedFromNetwork = useCallback(
-    (repos: OrganizationRepoSummary[]) => {
-      if (!orgName) {
-        return
-      }
-
-      const saved = saveOrgVersion({
-        org: orgName,
-        authenticated: apiClient.isAuthenticated,
-        repos,
-      })
-
-      if (!saved) {
-        return
-      }
-
-      setHistory(
-        appendSearchHistory({
-          kind: 'org',
-          target: saved.target,
-          searchedAt: saved.fetchedAt,
-          fetchedAt: saved.fetchedAt,
-          source: 'network',
-          snapshotId: saved.id,
-        }),
-      )
-
-      if (isSnapshotRoute) {
-        setStoredOrgVersion(saved)
-        setStoredRepoVersion(null)
-        setSelectedRepo(null)
-        setDataViewMode('storage')
-        setMessage(`Snapshot refreshed for ${saved.org} at ${formatLocalDate(saved.fetchedAt)}.`)
-        replaceSnapshotUrlParams('org', saved.id)
-      }
-    },
-    [apiClient.isAuthenticated, isSnapshotRoute, orgName],
-  )
-
-  const handleRepoFetchedFromNetwork = useCallback(
-    (bundle: RepositoryBundle) => {
-      if (!repoTarget) {
-        return
-      }
-
-      const saved = saveRepoVersion({
-        owner: repoTarget.owner,
-        repo: repoTarget.repo,
-        authenticated: apiClient.isAuthenticated,
-        bundle,
-      })
-
-      if (!saved) {
-        return
-      }
-
-      setHistory(
-        appendSearchHistory({
-          kind: 'repo',
-          target: saved.target,
-          searchedAt: saved.fetchedAt,
-          fetchedAt: saved.fetchedAt,
-          source: 'network',
-          snapshotId: saved.id,
-        }),
-      )
-
-      if (isSnapshotRoute) {
-        setStoredRepoVersion(saved)
-        if (activeTarget?.type === 'repo') {
-          setStoredOrgVersion(null)
-        }
-        setDataViewMode('storage')
-        setMessage(`Snapshot refreshed for ${saved.target} at ${formatLocalDate(saved.fetchedAt)}.`)
-        replaceSnapshotUrlParams('repo', saved.id)
-      }
-    },
-    [activeTarget, apiClient.isAuthenticated, isSnapshotRoute, repoTarget],
-  )
-
-  const orgQuery = useOrgRepositoriesQuery({
-    apiClient,
-    orgName,
-    enabled: Boolean(orgName) && dataViewMode === 'network',
-    onFetchedFromNetwork: handleOrgFetchedFromNetwork,
-  })
-
-  const repoQuery = useRepositoryBundleQuery({
-    apiClient,
-    owner: repoTarget?.owner ?? null,
-    repo: repoTarget?.repo ?? null,
-    enabled: Boolean(repoTarget) && dataViewMode === 'network',
-    onFetchedFromNetwork: handleRepoFetchedFromNetwork,
-  })
-
-  const usingStoredOrg =
-    dataViewMode === 'storage' &&
-    storedOrgVersion !== null &&
-    orgName === storedOrgVersion.org
-
-  const usingStoredRepo =
-    dataViewMode === 'storage' &&
-    storedRepoVersion !== null &&
-    repoTarget !== null &&
-    `${repoTarget.owner}/${repoTarget.repo}` === storedRepoVersion.target
-
-  const activeOrgData = usingStoredOrg ? storedOrgVersion.repos : orgQuery.data
-  const activeRepoBundle = usingStoredRepo ? storedRepoVersion.bundle : repoQuery.data
-
-  const analytics = useMemo(
-    () =>
-      activeRepoBundle
-        ? computeRepoAnalytics(activeRepoBundle, {
-            includeBots,
-            excludeMaintainers,
-          })
-        : null,
-    [activeRepoBundle, excludeMaintainers, includeBots],
-  )
-
-  const orgRepos = useMemo(() => {
-    const source = activeOrgData ?? []
-
-    const filtered = showForks
-      ? source
-      : source.filter((repository) => !repository.isFork)
-
-    return filtered.sort((left, right) => {
-      const leftScore = new Date(left.pushedAt).getTime()
-      const rightScore = new Date(right.pushedAt).getTime()
-      return rightScore - leftScore
-    })
-  }, [activeOrgData, showForks])
-
-  const orgErrorMessage =
-    !usingStoredOrg && orgQuery.error
-      ? toUserMessage(orgQuery.error, {
-          target: orgName ?? undefined,
-          token,
-        })
-      : null
-
-  const repoErrorMessage =
-    !usingStoredRepo && repoQuery.error
-      ? toUserMessage(repoQuery.error, {
-          target: repoTarget ? `${repoTarget.owner}/${repoTarget.repo}` : undefined,
-          token,
-        })
-      : null
-  const isNetworkFetching = orgQuery.isFetching || repoQuery.isFetching
-
-  const handleSearchSubmit = (value: string) => {
-    const target = parseSearchTarget(value)
-
-    if (!target) {
-      setMessage('Enter either an org name or owner/repo.')
-      return
-    }
-
-    setMessage(null)
-    clearSnapshotUrlParams()
-    setDataViewMode('network')
-    setStoredOrgVersion(null)
-    setStoredRepoVersion(null)
-    setActiveTarget(target)
-
-    if (target.type === 'repo') {
-      setSelectedRepo(target.value)
-    } else {
-      setSelectedRepo(null)
-    }
+  const changeToken = (next: string) => {
+    void queryClient.cancelQueries()
+    queryClient.clear()
+    setRates({})
+    setToken(next)
   }
-
-  const handleLoadSaved = (value: string) => {
-    const target = parseSearchTarget(value)
-
-    if (!target) {
-      setMessage('Enter either an org name or owner/repo.')
+  const submit = (value: string) => {
+    if (GITHUB_TOKEN_REGEX.test(value.trim())) {
+      setSearch('')
+      setError('That looks like a token. Add it in GitHub connection.')
+      setSettings(true)
       return
     }
-
-    if (target.type === 'repo') {
-      const saved = getLatestRepoVersion(target.value.owner, target.value.repo)
-      if (!saved) {
-        setMessage(`No saved snapshot found for ${target.value.owner}/${target.value.repo}.`)
-        return
-      }
-
-      setDataViewMode('storage')
-      setStoredRepoVersion(saved)
-      setStoredOrgVersion(null)
-      setActiveTarget(target)
-      setSelectedRepo(target.value)
-      setMessage(`Loaded saved snapshot for ${saved.target} from ${formatLocalDate(saved.fetchedAt)}.`)
-      setHistory(
-        appendSearchHistory({
-          kind: 'repo',
-          target: saved.target,
-          searchedAt: new Date().toISOString(),
-          fetchedAt: saved.fetchedAt,
-          source: 'storage',
-          snapshotId: saved.id,
-        }),
-      )
+    const parsed = parseSearchTarget(value)
+    if (!parsed) {
+      setError('Enter a GitHub organization, owner/repository, or GitHub URL.')
       return
     }
-
-    const saved = getLatestOrgVersion(target.value.org)
-    if (!saved) {
-      setMessage(`No saved snapshot found for ${target.value.org}.`)
-      return
-    }
-
-    setDataViewMode('storage')
-    setStoredOrgVersion(saved)
-    setStoredRepoVersion(null)
-    setActiveTarget(target)
-    setSelectedRepo(null)
-    setMessage(`Loaded saved snapshot for ${saved.org} from ${formatLocalDate(saved.fetchedAt)}.`)
-    setHistory(
-      appendSearchHistory({
-        kind: 'org',
-        target: saved.target,
-        searchedAt: new Date().toISOString(),
-        fetchedAt: saved.fetchedAt,
-        source: 'storage',
-        snapshotId: saved.id,
-      }),
+    setError('')
+    go(
+      parsed.type === 'repo'
+        ? `${parsed.value.owner}/${parsed.value.repo}`
+        : parsed.value.org,
     )
   }
-
-  const handleOpenHistory = (entry: PersistedSearchHistoryEntry) => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const snapshotUrl = buildSnapshotUrl(entry)
-    const opened = window.open(snapshotUrl, '_blank', 'noopener,noreferrer')
-    if (!opened) {
-      setMessage('Popup blocked. Allow popups to open snapshots in a new tab.')
-    }
-  }
-
-  const handleTokenDetected = (detectedToken: string) => {
-    setToken(detectedToken)
-    setSearchInput('')
-    setMessage('Token detected in search input and moved into authentication field.')
-  }
-
-  const handleRefreshSnapshot = useCallback(() => {
-    if (!isSnapshotRoute) {
-      return
-    }
-
-    if (!activeTarget) {
-      setMessage('Load a snapshot first from history, then refresh it.')
-      return
-    }
-
-    const targetLabel =
-      activeTarget.type === 'repo'
-        ? `${activeTarget.value.owner}/${activeTarget.value.repo}`
-        : activeTarget.value.org
-
-    setMessage(`Refreshing ${targetLabel} from GitHub...`)
-    clearRepoBundleCache()
-
-    if (activeTarget.type === 'repo') {
-      queryClient.removeQueries({
-        queryKey: ['repository-bundle', activeTarget.value.owner, activeTarget.value.repo],
-      })
-    } else {
-      queryClient.removeQueries({
-        queryKey: ['org-repositories', activeTarget.value.org],
-      })
-      setSelectedRepo(null)
-    }
-
-    setStoredOrgVersion(null)
-    setStoredRepoVersion(null)
-    setDataViewMode('network')
-  }, [activeTarget, isSnapshotRoute, queryClient])
-
-  const activeTargetLabel = useMemo(() => {
-    if (!activeTarget) {
-      return null
-    }
-
-    if (activeTarget.type === 'repo') {
-      return `${activeTarget.value.owner}/${activeTarget.value.repo}`
-    }
-
-    return activeTarget.value.org
-  }, [activeTarget])
-
-  const appContent = (
-    <>
-      {message ? (
-        <section className="panel">
-          <p className="warning">{message}</p>
-        </section>
-      ) : null}
-
-      {dataViewMode === 'storage' ? (
-        <section className="panel">
-          <p className="subtle">
-            {isSnapshotRoute
-              ? 'Viewing saved local snapshot. Use Snapshot tools to refresh from GitHub.'
-              : 'Viewing saved local snapshot. Use "Fetch activity" to refresh from GitHub.'}
-          </p>
-          {isSnapshotRoute ? (
-            <p className="subtle">
-              <a href={dashboardPath}>Open dashboard</a> for live fetches and history tools.
-            </p>
-          ) : null}
-        </section>
-      ) : null}
-
-      {orgErrorMessage ? (
-        <section className="panel">
-          <p className="warning">{orgErrorMessage}</p>
-        </section>
-      ) : null}
-
-      {repoErrorMessage ? (
-        <section className="panel">
-          <p className="warning">{repoErrorMessage}</p>
-        </section>
-      ) : null}
-
-      {orgName ? (
-        <OrgView
-          orgName={orgName}
-          repos={orgRepos}
-          loading={usingStoredOrg ? false : orgQuery.isLoading}
-          fetching={usingStoredOrg ? false : orgQuery.isFetching}
-          progress={usingStoredOrg ? null : orgQuery.progress}
-          showForks={showForks}
-          onToggleForks={setShowForks}
-          selectedRepo={repoTarget ? `${repoTarget.owner}/${repoTarget.repo}` : null}
-          onSelectRepo={(repository) => {
-            if (isSnapshotRoute) {
-              const savedRepo = getLatestRepoVersion(repository.owner, repository.name)
-              if (!savedRepo) {
-                setMessage(
-                  `No saved repo snapshot for ${repository.owner}/${repository.name}. Open dashboard to fetch it.`,
-                )
-                return
-              }
-
-              setDataViewMode('storage')
-              setStoredRepoVersion(savedRepo)
-              setSelectedRepo({
-                owner: repository.owner,
-                repo: repository.name,
-              })
-              setIncludeBots(false)
-              setExcludeMaintainers(false)
-              return
-            }
-
-            setDataViewMode('network')
-            setStoredRepoVersion(null)
-            setSelectedRepo({
-              owner: repository.owner,
-              repo: repository.name,
-            })
-            setIncludeBots(false)
-            setExcludeMaintainers(false)
-          }}
-        />
-      ) : null}
-
-      {repoTarget ? (
-        <RepoDetailView
-          repoFullName={`${repoTarget.owner}/${repoTarget.repo}`}
-          analytics={analytics}
-          loading={usingStoredRepo ? false : repoQuery.isLoading}
-          fetching={usingStoredRepo ? false : repoQuery.isFetching}
-          error={usingStoredRepo ? null : repoErrorMessage}
-          includeBots={includeBots}
-          onIncludeBotsChange={setIncludeBots}
-          excludeMaintainers={excludeMaintainers}
-          onExcludeMaintainersChange={setExcludeMaintainers}
-          onBackToOrg={
-            activeTarget?.type === 'org'
-              ? () => {
-                  setSelectedRepo(null)
-                }
-              : undefined
-          }
-          fetchedAt={activeRepoBundle?.fetchedAt}
-        />
-      ) : null}
-
-      {!activeTarget ? (
-        <section className="panel intro">
-          {isSnapshotRoute ? (
-            <>
-              <h2>Snapshot URL required</h2>
-              <p>
-                Open this route via <code>Open in new tab</code> from search history.
-              </p>
-              <p>
-                <a href={dashboardPath}>Return to dashboard</a> to fetch data and manage history.
-              </p>
-            </>
-          ) : (
-            <>
-              <h2>Start with a GitHub org or repo</h2>
-              <p>
-                Try <code>tensorflow</code> for org mode or <code>facebook/react</code> for a repo deep dive.
-              </p>
-              <p>
-                Deep metrics include issue/PR flow, commit velocity, contributor concentration, and a transparent 0-100 health score.
-              </p>
-            </>
-          )}
-        </section>
-      ) : null}
-    </>
-  )
-
   return (
-    <main className="app-shell">
-      <header className="hero">
-        <p className="eyebrow">GitHub OSS Activity Tracker</p>
-        <h1>repoBuzz</h1>
-        {isSnapshotRoute ? (
-          <p>Snapshot route for saved local versions.</p>
-        ) : (
-          <p>
-            Track org-level momentum and drill into repo health with hybrid REST + GraphQL metrics.
-          </p>
-        )}
+    <div className="app-shell">
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(event) => {
+          event.preventDefault()
+          document.getElementById('main-content')?.focus()
+        }}
+      >
+        Skip to content
+      </a>
+      <header className="topbar">
+        <a className="brand" href="#/" aria-label="repoBuzz home">
+          <span className="brand-mark">
+            b<span>↗</span>
+          </span>
+          repo<span>Buzz</span>
+          <small>THE OPEN-SOURCE FIELD GUIDE</small>
+        </a>
+        <nav aria-label="Main navigation">
+          <a className={!route ? 'nav-active' : ''} href="#/">
+            Explore
+          </a>
+          <a className={route === 'saved' ? 'nav-active' : ''} href="#/saved">
+            Saved explorations
+          </a>
+          <button
+            className="connection ghost"
+            onClick={() => setSettings((v) => !v)}
+            aria-expanded={settings}
+          >
+            <i className={token ? 'connected' : ''} />
+            {token ? 'Token added' : 'Connect GitHub'}
+          </button>
+        </nav>
       </header>
-
-      {isSnapshotRoute ? (
-        <section className="snapshot-utility-bar">
-          <button type="button" className="ghost" onClick={() => setIsSnapshotSheetOpen(true)}>
-            Snapshot tools
+      {settings && (
+        <section className="settings-layout">
+          <TokenInput
+            token={token}
+            onTokenChange={changeToken}
+            onClearToken={() => changeToken('')}
+          />
+          <RateLimitIndicator
+            restRateLimit={rates.rest}
+            graphRateLimit={rates.graphql}
+            isAuthenticated={!!token}
+          />
+          <button
+            className="ghost close-settings"
+            onClick={() => setSettings(false)}
+          >
+            Close settings ×
           </button>
         </section>
-      ) : null}
-
-      {!isSnapshotRoute ? (
-        <>
-          <section className="control-grid">
-            <TokenInput
-              token={token}
-              onTokenChange={setToken}
-              onClearToken={() => setToken('')}
-            />
-
-            <SearchBar
-              value={searchInput}
-              onChange={setSearchInput}
-              onSubmit={handleSearchSubmit}
-              onLoadSaved={handleLoadSaved}
-              onTokenDetected={handleTokenDetected}
-              loading={isNetworkFetching}
-            />
-
-            <RateLimitIndicator
-              restRateLimit={rateLimits.rest}
-              graphRateLimit={rateLimits.graphql}
-              isAuthenticated={apiClient.isAuthenticated}
-            />
-          </section>
-
-          <SearchHistory
-            history={history}
-            onOpen={handleOpenHistory}
-            onRemove={(entryId) => setHistory(removeHistoryEntry(entryId))}
-            onClear={() => setHistory(clearHistory())}
-            onClearAllPersistedData={() => {
-              clearAllPersistedData()
-              setHistory([])
-              setStoredOrgVersion(null)
-              setStoredRepoVersion(null)
-              setDataViewMode('network')
-              setMessage('Cleared all saved snapshots and history.')
-            }}
-          />
-        </>
-      ) : null}
-      {appContent}
-
-      {isSnapshotRoute && isSnapshotSheetOpen ? (
-        <div
-          className="snapshot-sheet-backdrop"
-          onClick={() => setIsSnapshotSheetOpen(false)}
-          role="presentation"
-        >
-          <aside
-            className="snapshot-sheet"
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Snapshot tools"
-          >
-            <header className="snapshot-sheet-head">
-              <h2>Snapshot tools</h2>
-              <button type="button" className="ghost" onClick={() => setIsSnapshotSheetOpen(false)}>
-                Close
-              </button>
-            </header>
-
-            <TokenInput
-              token={token}
-              onTokenChange={setToken}
-              onClearToken={() => setToken('')}
-            />
-
-            <section className="panel">
-              <p className="subtle snapshot-target">
-                {activeTargetLabel ? `Current target: ${activeTargetLabel}` : 'No target loaded.'}
-              </p>
-              <div className="snapshot-refresh-actions">
-                <button
-                  type="button"
-                  onClick={handleRefreshSnapshot}
-                  disabled={!activeTarget || isNetworkFetching}
+      )}
+      <main id="main-content" tabIndex={-1}>
+        {!route ? (
+          <>
+            <section className="hero">
+              <div className="hero-copy">
+                <p className="eyebrow">
+                  <span /> YOUR NEXT CONTRIBUTION STARTS HERE
+                </p>
+                <h1>
+                  Find your people.
+                  <br />
+                  Make your <em>first pull request.</em>
+                </h1>
+                <p className="hero-description">
+                  Explore the communities behind the code. Find active projects,
+                  understand how they work, and discover a place to learn and
+                  grow.
+                </p>
+                <form
+                  className="discovery-search"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    submit(search)
+                  }}
                 >
-                  {isNetworkFetching ? 'Refreshing...' : 'Refresh from GitHub'}
-                </button>
+                  <label htmlFor="search">
+                    Where are you curious to contribute?
+                  </label>
+                  <div>
+                    <span aria-hidden="true">⌕</span>
+                    <input
+                      id="search"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Organization, owner/repo, or GitHub URL"
+                      autoComplete="off"
+                      spellCheck={false}
+                      required
+                    />
+                    <button>
+                      Find the buzz <span aria-hidden="true">↗</span>
+                    </button>
+                  </div>
+                </form>
+                <p className="search-note">
+                  Public repositories · Saved on this device · Your token stays
+                  in memory
+                </p>
+              </div>
+              <aside className="field-note">
+                <span className="note-number">FIELD NOTE / 001</span>
+                <div className="orbit" aria-hidden="true">
+                  <span>+</span>
+                  <span>↗</span>
+                  <span>⌘</span>
+                  <b>✳</b>
+                </div>
+                <h2>
+                  Big impact.
+                  <br />
+                  Small beginnings.
+                </h2>
+                <p>
+                  A useful bug report, a clearer sentence, a first fix. Every
+                  contribution counts.
+                </p>
+                <a href="#/demo">
+                  Take a sample tour <span>↗</span>
+                </a>
+              </aside>
+            </section>
+            {error && (
+              <p className="notice" role="alert">
+                {error}
+              </p>
+            )}
+            <section className="discovery-section">
+              <header className="section-heading">
+                <div>
+                  <p className="eyebrow">FOLLOW YOUR CURIOSITY</p>
+                  <h2>A few places to start</h2>
+                </div>
+                <p>Pick an ecosystem. Explore its community.</p>
+              </header>
+              <div className="ecosystem-grid">
+                {[
+                  [
+                    '01',
+                    'withastro',
+                    'Build for the web',
+                    'Frameworks, documentation, and the tools behind better websites.',
+                    'ASTRO / WEB DEVELOPMENT',
+                    '↗',
+                  ],
+                  [
+                    '02',
+                    'pallets',
+                    'Make Python useful',
+                    'Small, focused libraries powering a world of Python applications.',
+                    'PALLETS / PYTHON',
+                    '⌘',
+                  ],
+                  [
+                    '03',
+                    'cli',
+                    'Craft developer tools',
+                    'Explore the command line and the tools developers use every day.',
+                    'GITHUB CLI / TOOLING',
+                    '>_',
+                  ],
+                ].map(([n, org, title, description, tag, icon]) => (
+                  <a className="ecosystem-card" key={org} href={`#/${org}`}>
+                    <div className="ecosystem-top">
+                      <span>{n}</span>
+                      <span>{icon}</span>
+                    </div>
+                    <p className="eyebrow">{tag}</p>
+                    <h3>{title}</h3>
+                    <p>{description}</p>
+                    <span className="text-link">
+                      Explore {org} <b>↗</b>
+                    </span>
+                  </a>
+                ))}
               </div>
               <p className="subtle">
-                Refreshing saves a new timestamped snapshot and updates this URL.
+                Starting points, not endorsements. Fetch current activity to
+                decide what fits you.
               </p>
             </section>
-          </aside>
+            <section className="reading-guide">
+              <p className="eyebrow">LOOK BEYOND THE STAR COUNT</p>
+              <div>
+                <article>
+                  <span>01 / MOMENTUM</span>
+                  <h3>Is the project moving?</h3>
+                  <p>
+                    Look for consistent activity and recent merged pull
+                    requests.
+                  </p>
+                </article>
+                <article>
+                  <span>02 / OPPORTUNITY</span>
+                  <h3>Where can you help?</h3>
+                  <p>
+                    Start with good first issues and read the contribution
+                    guidelines.
+                  </p>
+                </article>
+                <article>
+                  <span>03 / COMMUNITY</span>
+                  <h3>Who will you learn with?</h3>
+                  <p>
+                    Explore contributors, then read conversations to understand
+                    the culture.
+                  </p>
+                </article>
+              </div>
+            </section>
+          </>
+        ) : route === 'saved' ? (
+          <SavedPage />
+        ) : (
+          <ExplorePage
+            key={route + String(!!token)}
+            route={route}
+            client={client}
+            onConnect={() => setSettings(true)}
+          />
+        )}
+      </main>
+      <footer>
+        <a className="brand" href="#/">
+          repo<span>Buzz</span>
+        </a>
+        <p>Find a community. Start small. Keep showing up.</p>
+        <a href="#/demo">How to read the signals ↗</a>
+      </footer>
+    </div>
+  )
+}
+
+function SavedPage() {
+  const [history, setHistory] = useState(listSearchHistory)
+  const queryClient = useQueryClient()
+  const seen = new Set<string>()
+  const unique = history.filter((entry) => {
+    if (seen.has(entry.target)) return false
+    seen.add(entry.target)
+    return true
+  })
+  return (
+    <section className="page-section">
+      <p className="eyebrow">YOUR FIELD NOTES</p>
+      <div className="section-heading">
+        <h1>Saved explorations</h1>
+        <button
+          className="ghost"
+          disabled={!history.length}
+          onClick={() => {
+            clearAllPersistedData()
+            queryClient.clear()
+            setHistory([])
+          }}
+        >
+          Clear saved data
+        </button>
+      </div>
+      <p className="subtle">
+        Snapshots live in this browser. Open one without making another GitHub
+        request.
+      </p>
+      {unique.length ? (
+        <div className="saved-list">
+          {unique.map((entry) => (
+            <a key={entry.target} href={`#/${entry.target}`}>
+              <span>
+                <small>
+                  {entry.kind === 'repo' ? 'REPOSITORY' : 'ORGANIZATION'}
+                </small>
+                <strong>{entry.target}</strong>
+              </span>
+              <time>{new Date(entry.fetchedAt).toLocaleString()}</time>
+              <span>Open exploration ↗</span>
+            </a>
+          ))}
         </div>
-      ) : null}
-    </main>
+      ) : (
+        <div className="empty-state">
+          <span>⌑</span>
+          <h2>Your next discovery belongs here.</h2>
+          <p>
+            Explore a repository or organization to save your first snapshot.
+          </p>
+          <a className="button-link" href="#/">
+            Explore communities ↗
+          </a>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ExplorePage({
+  route,
+  client,
+  onConnect,
+}: {
+  route: string
+  client: GitHubApiClient
+  onConnect: () => void
+}) {
+  const target = parseSearchTarget(route)
+  const isRepo = target?.type === 'repo'
+  const isDemo = route === 'demo'
+  const [showForks, setShowForks] = useState(false)
+  const [storageWarning, setStorageWarning] = useState('')
+  const [saved] = useState(() =>
+    isRepo
+      ? getLatestRepoVersion(target.value.owner, target.value.repo)
+      : getLatestOrgVersion(route),
+  )
+  const query = useQuery({
+    queryKey: ['exploration', route, client.isAuthenticated],
+    enabled: !isDemo && !!target && client.isAuthenticated && !saved,
+    initialData: saved,
+    staleTime: Infinity,
+    queryFn: async ({ signal }) => {
+      const authenticated = client.isAuthenticated
+      let data
+      if (isRepo) {
+        const bundle = await client.fetchRepositoryBundle(
+          target.value.owner,
+          target.value.repo,
+          { signal },
+        )
+        const persisted = saveRepoVersion({
+          owner: target.value.owner,
+          repo: target.value.repo,
+          authenticated,
+          bundle,
+        })
+        data = persisted ?? {
+          id: '',
+          kind: 'repo' as const,
+          owner: target.value.owner,
+          repo: target.value.repo,
+          target: route,
+          fetchedAt: bundle.fetchedAt,
+          authenticated,
+          bundle,
+        }
+      } else {
+        const repos = await client.fetchOrganizationRepositoriesAll(route, {
+          signal,
+        })
+        const persisted = saveOrgVersion({ org: route, authenticated, repos })
+        data = persisted ?? {
+          id: '',
+          kind: 'org' as const,
+          org: route,
+          target: route,
+          fetchedAt: new Date().toISOString(),
+          authenticated,
+          repos,
+        }
+      }
+      setStorageWarning(
+        data.id
+          ? ''
+          : 'Activity loaded, but this browser could not save it. Free local storage to keep it for later.',
+      )
+      if (data.id)
+        appendSearchHistory({
+          kind: data.kind,
+          target: data.target,
+          snapshotId: data.id,
+          fetchedAt: data.fetchedAt,
+          searchedAt: data.fetchedAt,
+          source: 'network',
+        })
+      return data
+    },
+  })
+  if (!target && !isDemo)
+    return (
+      <div className="empty-state">
+        <h1>That exploration could not be found.</h1>
+        <a href="#/">Return to explore</a>
+      </div>
+    )
+  return (
+    <section className="page-section">
+      <div className="breadcrumb">
+        <a href="#/">Explore</a>
+        <span>/</span>
+        <span>{isDemo ? 'Sample exploration' : route}</span>
+      </div>
+      <div className="page-toolbar">
+        <span className="eyebrow">
+          {isDemo
+            ? 'ILLUSTRATIVE DATA · NOT A LIVE REPOSITORY'
+            : isRepo
+              ? 'REPOSITORY FIELD NOTES'
+              : 'ORGANIZATION FIELD NOTES'}
+        </span>
+        {!isDemo && (
+          <button
+            className="ghost"
+            disabled={query.isFetching}
+            onClick={() =>
+              client.isAuthenticated ? void query.refetch() : onConnect()
+            }
+          >
+            {query.isFetching ? 'Fetching activity…' : 'Refresh from GitHub ↻'}
+          </button>
+        )}
+      </div>
+      {!isDemo && query.data && (
+        <p className="freshness">
+          {query.data.id ? 'Saved on this device' : 'Not saved'} · Fetched{' '}
+          {new Date(query.data.fetchedAt).toLocaleString()} · Refresh when you
+          need current activity.
+        </p>
+      )}
+      {storageWarning && <p className="notice">{storageWarning}</p>}
+      {query.error && (
+        <p className="notice" role="alert">
+          {toUserMessage(query.error, { target: route })}
+        </p>
+      )}
+      {!isDemo && !query.data && !client.isAuthenticated && (
+        <div className="empty-state">
+          <span>↗</span>
+          <h1>Get to know {route}.</h1>
+          <p>
+            Connect GitHub to fetch community activity. A read-only token is
+            required for GitHub’s GraphQL API.
+          </p>
+          <button onClick={onConnect}>Connect GitHub</button>
+          <a href="#/demo">Or explore the sample first →</a>
+        </div>
+      )}
+      {query.isFetching && !query.data && (
+        <div className="empty-state" role="status">
+          <div className="loading-bar" />
+          <h2>Listening for the buzz…</h2>
+          <p>
+            Collecting all issue and PR pages for the past three months. Busy
+            projects can take longer. GitHub may take a moment to prepare
+            statistics.
+          </p>
+        </div>
+      )}
+      {(isRepo || isDemo) && (query.data?.kind === 'repo' || isDemo) && (
+        <Suspense fallback={<p role="status">Opening field notes…</p>}>
+          <RepositoryPage
+            bundle={query.data?.kind === 'repo' ? query.data.bundle : undefined}
+          />
+        </Suspense>
+      )}
+      {!isRepo && !isDemo && query.data?.kind === 'org' && (
+        <OrgView
+          orgName={route}
+          repos={
+            showForks
+              ? query.data.repos
+              : query.data.repos.filter((repo) => !repo.isFork)
+          }
+          loading={false}
+          fetching={query.isFetching}
+          progress={null}
+          showForks={showForks}
+          onToggleForks={setShowForks}
+          selectedRepo={null}
+          onSelectRepo={(repo) => go(repo.nameWithOwner)}
+        />
+      )}
+    </section>
   )
 }

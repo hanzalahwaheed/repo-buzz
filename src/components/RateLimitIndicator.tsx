@@ -40,7 +40,8 @@ function renderRateLimitCard(title: string, snapshot?: RateLimitSnapshot) {
     <article className="rate-card">
       <h3>{title}</h3>
       <p className="value">
-        {snapshot.remaining.toLocaleString()} / {snapshot.limit.toLocaleString()}
+        {snapshot.remaining.toLocaleString()} /{' '}
+        {snapshot.limit.toLocaleString()}
       </p>
       <p className="subtle">Resets {formatResetTime(snapshot.resetAt)}</p>
       {snapshot.cost !== undefined ? (
@@ -77,7 +78,8 @@ export function RateLimitIndicator({
 
       {!isAuthenticated ? (
         <p className="warning">
-          No token supplied. Unauthenticated mode is limited to 60 requests/hour.
+          Connect GitHub to fetch activity. Saved explorations and the sample
+          tour work without a token.
         </p>
       ) : null}
     </section>

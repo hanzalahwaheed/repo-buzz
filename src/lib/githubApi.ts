@@ -1,3 +1,4 @@
+import { threeMonthWindow, type AnalysisWindow } from './analysisWindow'
 import pLimit from 'p-limit'
 
 import { GitHubApiError } from './githubError'
@@ -20,12 +21,7 @@ const GITHUB_API_VERSION = '2022-11-28'
 const GRAPHQL_CONNECTION_PAGE_SIZE = 100
 const STATS_RETRY_MAX_ATTEMPTS = 5
 const STATS_RETRY_DELAY_MS = 2200
-const RECENT_COMMIT_FALLBACK_DAYS = 30
 const RECENT_COMMIT_FALLBACK_PER_PAGE = 100
-const RECENT_COMMIT_FALLBACK_MAX_PAGES = 10
-const DAY_MS = 24 * 60 * 60 * 1000
-
-const etagCache = new Map<string, { etag: string; data: unknown }>()
 
 interface ClientOptions {
   token?: string
@@ -110,6 +106,7 @@ interface OrgRepositoriesQueryResponse {
 
 interface RepositorySnapshotResponse {
   repository: {
+    isPrivate: boolean
     name: string
     nameWithOwner: string
     description: string | null
@@ -152,6 +149,7 @@ interface RepositorySnapshotResponse {
       totalCount: number
     }
     issues: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null }
       nodes: Array<{
         id: string
         createdAt: string
@@ -171,6 +169,7 @@ interface RepositorySnapshotResponse {
       }>
     }
     pullRequests: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null }
       nodes: Array<{
         id: string
         createdAt: string
@@ -236,10 +235,11 @@ interface RecentCommitListItem {
 interface RecentCommitFallback {
   commitActivity: CommitActivityWeek[]
   contributors: ContributorStat[]
-  truncated: boolean
 }
 
-function parseRateLimitFromHeaders(headers: Headers): Omit<RateLimitSnapshot, 'source'> | null {
+function parseRateLimitFromHeaders(
+  headers: Headers,
+): Omit<RateLimitSnapshot, 'source'> | null {
   const limit = Number(headers.get('x-ratelimit-limit') ?? '')
   const remaining = Number(headers.get('x-ratelimit-remaining') ?? '')
   const resetUnix = Number(headers.get('x-ratelimit-reset') ?? '')
@@ -276,7 +276,9 @@ function normalizeActor(
   }
 }
 
-function sanitizeContributorStats(contributors: ContributorStat[]): ContributorStat[] {
+function sanitizeContributorStats(
+  contributors: ContributorStat[],
+): ContributorStat[] {
   return contributors.map((contributor) => ({
     author: contributor.author,
     weeks: contributor.weeks.map((week) => ({
@@ -325,9 +327,9 @@ function isCommitLimitError(error: GitHubApiError): boolean {
 }
 
 const ORG_REPOSITORIES_QUERY = `
-query OrganizationRepositories($login: String!, $cursor: String) {
-  organization(login: $login) {
-    repositories(first: 100, after: $cursor, orderBy: { field: PUSHED_AT, direction: DESC }) {
+query OrganizationRepositories($login: String!, $cursor: String, $isOrg: Boolean!) {
+  organization(login: $login) @include(if: $isOrg) {
+    repositories(first: 100, privacy: PUBLIC, after: $cursor, orderBy: { field: PUSHED_AT, direction: DESC }) {
       totalCount
       pageInfo {
         hasNextPage
@@ -364,11 +366,12 @@ query OrganizationRepositories($login: String!, $cursor: String) {
       }
     }
   }
-  user(login: $login) {
+  user(login: $login) @skip(if: $isOrg) {
     repositories(
       first: 100
       after: $cursor
       ownerAffiliations: OWNER
+      privacy: PUBLIC
       orderBy: { field: PUSHED_AT, direction: DESC }
     ) {
       totalCount
@@ -417,9 +420,48 @@ query OrganizationRepositories($login: String!, $cursor: String) {
 }
 `
 
+const ISSUE_ACTIVITY_FIELDS = `pageInfo { hasNextPage endCursor }
+nodes {
+        id
+        createdAt
+        closedAt
+        updatedAt
+        state
+        authorAssociation
+        author {
+          __typename
+          login
+        }
+        labels(first: 20) {
+          nodes {
+            name
+          }
+        }
+      }`
+const PR_ACTIVITY_FIELDS = `pageInfo { hasNextPage endCursor }
+nodes {
+        id
+        createdAt
+        mergedAt
+        closedAt
+        updatedAt
+        state
+        additions
+        deletions
+        authorAssociation
+        author {
+          __typename
+          login
+        }
+        reviews(first: 1) {
+          totalCount
+        }
+      }`
+
 const REPOSITORY_SNAPSHOT_QUERY = `
 query RepositorySnapshot($owner: String!, $name: String!, $issueCount: Int!, $prCount: Int!) {
   repository(owner: $owner, name: $name) {
+    isPrivate
     name
     nameWithOwner
     description
@@ -461,45 +503,8 @@ query RepositorySnapshot($owner: String!, $name: String!, $issueCount: Int!, $pr
     helpWantedIssues: issues(states: OPEN, labels: ["help wanted"]) {
       totalCount
     }
-    issues(first: $issueCount, orderBy: { field: CREATED_AT, direction: DESC }) {
-      nodes {
-        id
-        createdAt
-        closedAt
-        updatedAt
-        state
-        authorAssociation
-        author {
-          __typename
-          login
-        }
-        labels(first: 20) {
-          nodes {
-            name
-          }
-        }
-      }
-    }
-    pullRequests(first: $prCount, orderBy: { field: CREATED_AT, direction: DESC }) {
-      nodes {
-        id
-        createdAt
-        mergedAt
-        closedAt
-        updatedAt
-        state
-        additions
-        deletions
-        authorAssociation
-        author {
-          __typename
-          login
-        }
-        reviews(first: 1) {
-          totalCount
-        }
-      }
-    }
+    issues(first: $issueCount, orderBy: { field: UPDATED_AT, direction: DESC }) { ${ISSUE_ACTIVITY_FIELDS} }
+    pullRequests(first: $prCount, orderBy: { field: UPDATED_AT, direction: DESC }) { ${PR_ACTIVITY_FIELDS} }
   }
   rateLimit {
     limit
@@ -512,6 +517,7 @@ query RepositorySnapshot($owner: String!, $name: String!, $issueCount: Int!, $pr
 `
 
 export class GitHubApiClient {
+  private etagCache = new Map<string, { etag: string; data: unknown }>()
   private token?: string
   private onRateLimit?: (snapshot: RateLimitSnapshot) => void
 
@@ -582,7 +588,7 @@ export class GitHubApiClient {
     const headers = this.buildHeaders()
 
     if (options.useEtag) {
-      const cached = etagCache.get(cacheKey)
+      const cached = this.etagCache.get(cacheKey)
       if (cached?.etag) {
         headers.set('If-None-Match', cached.etag)
       }
@@ -598,7 +604,7 @@ export class GitHubApiClient {
     this.emitRateLimitFromHeaders(response.headers)
 
     if (response.status === 304 && options.useEtag) {
-      const cached = etagCache.get(cacheKey)
+      const cached = this.etagCache.get(cacheKey)
       return {
         status: 304,
         data: (cached?.data ?? null) as T | null,
@@ -613,16 +619,16 @@ export class GitHubApiClient {
     }
 
     if (!response.ok) {
-      const payload = (await this.parseJsonSafe(response)) as
-        | {
-            message?: string
-            documentation_url?: string
-            errors?: Array<{ message?: string }>
-          }
-        | null
+      const payload = (await this.parseJsonSafe(response)) as {
+        message?: string
+        documentation_url?: string
+        errors?: Array<{ message?: string }>
+      } | null
 
       const rate = parseRateLimitFromHeaders(response.headers)
-      const retryAfterSeconds = Number(response.headers.get('retry-after') ?? '')
+      const retryAfterSeconds = Number(
+        response.headers.get('retry-after') ?? '',
+      )
 
       throw new GitHubApiError({
         message:
@@ -649,7 +655,7 @@ export class GitHubApiClient {
     const payload = (await this.parseJsonSafe(response)) as T | null
 
     if (options.useEtag && response.headers.has('etag') && payload) {
-      etagCache.set(cacheKey, {
+      this.etagCache.set(cacheKey, {
         etag: response.headers.get('etag') ?? '',
         data: payload,
       })
@@ -679,10 +685,12 @@ export class GitHubApiClient {
 
     const payload = (await this.parseJsonSafe(response)) as GraphqlEnvelope<T>
 
-    if (!response.ok || payload.errors?.length) {
+    if (!response.ok || payload?.errors?.length) {
       const rate = parseRateLimitFromHeaders(response.headers)
-      const retryAfterSeconds = Number(response.headers.get('retry-after') ?? '')
-      const errors = payload.errors?.map((entry) => entry.message) ?? []
+      const retryAfterSeconds = Number(
+        response.headers.get('retry-after') ?? '',
+      )
+      const errors = payload?.errors?.map((entry) => entry.message) ?? []
 
       throw new GitHubApiError({
         message:
@@ -703,7 +711,7 @@ export class GitHubApiClient {
       })
     }
 
-    if (!payload.data) {
+    if (!payload?.data) {
       throw new GitHubApiError({
         message: 'GitHub GraphQL response did not include data.',
         status: 500,
@@ -718,6 +726,11 @@ export class GitHubApiClient {
     login: string,
     options: OrgRepositoryOptions = {},
   ): Promise<OrganizationRepoSummary[]> {
+    const account = await this.restRequest<{ type: string }>(
+      `/users/${encodeURIComponent(login)}`,
+      { signal: options.signal },
+    )
+    const isOrg = account.data?.type === 'Organization'
     const repos: OrganizationRepoSummary[] = []
     let cursor: string | null = null
     let totalCount: number | null = null
@@ -725,18 +738,21 @@ export class GitHubApiClient {
     do {
       const response: OrgRepositoriesQueryResponse =
         await this.graphqlRequest<OrgRepositoriesQueryResponse>(
-        ORG_REPOSITORIES_QUERY,
-        {
-          login,
-          cursor,
-        },
-        options.signal,
+          ORG_REPOSITORIES_QUERY,
+          {
+            login,
+            cursor,
+            isOrg,
+          },
+          options.signal,
         )
 
       this.emitRateLimitFromGraphql(response.rateLimit)
 
       const connection: OrgRepoConnection | null =
-        response.organization?.repositories ?? response.user?.repositories ?? null
+        response.organization?.repositories ??
+        response.user?.repositories ??
+        null
 
       if (!connection) {
         throw new GitHubApiError({
@@ -760,10 +776,7 @@ export class GitHubApiClient {
           stargazerCount: node.stargazerCount,
           forkCount: node.forkCount,
           primaryLanguage: node.primaryLanguage?.name ?? null,
-          license:
-            node.licenseInfo?.spdxId ??
-            node.licenseInfo?.name ??
-            null,
+          license: node.licenseInfo?.spdxId ?? node.licenseInfo?.name ?? null,
           updatedAt: node.updatedAt,
           pushedAt: node.pushedAt,
           openIssueCount: node.issues.totalCount,
@@ -792,15 +805,26 @@ export class GitHubApiClient {
     repo: string,
     options: RepositoryBundleOptions = {},
   ): Promise<RepositoryBundle> {
-    const [snapshot, stats] = await Promise.all([
-      this.fetchRepositorySnapshot(owner, repo, options.signal),
-      this.fetchRepositoryStats(owner, repo, options.signal),
-    ])
+    const analysisWindow = threeMonthWindow(new Date().toISOString())
+    // Resolve access and public visibility before spending requests on statistics.
+    const snapshot = await this.fetchRepositorySnapshot(
+      owner,
+      repo,
+      options.signal,
+      analysisWindow.start,
+    )
+    const stats = await this.fetchRepositoryStats(
+      owner,
+      repo,
+      options.signal,
+      analysisWindow,
+    )
 
     return {
       snapshot,
       stats,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: analysisWindow.end,
+      analysisWindow,
     }
   }
 
@@ -821,10 +845,68 @@ export class GitHubApiClient {
     )
   }
 
+  private async fetchActivityPages<T extends { id: string; updatedAt: string }>(
+    owner: string,
+    name: string,
+    field: 'issues' | 'pullRequests',
+    initial: {
+      nodes: T[]
+      pageInfo: { hasNextPage: boolean; endCursor: string | null }
+    },
+    since: string,
+    signal?: AbortSignal,
+  ): Promise<T[]> {
+    const records = new Map<string, T>()
+    let page = initial
+    const cursors = new Set<string>()
+    const cutoff = Date.parse(since)
+    while (true) {
+      signal?.throwIfAborted()
+      for (const node of page.nodes) {
+        if (Date.parse(node.updatedAt) >= cutoff) records.set(node.id, node)
+      }
+      // Updated-date ordering includes old issues/PRs resolved in this period.
+      if (
+        page.nodes.some((node) => Date.parse(node.updatedAt) < cutoff) ||
+        !page.pageInfo.hasNextPage
+      )
+        break
+      const cursor = page.pageInfo.endCursor
+      if (!cursor || cursors.has(cursor))
+        throw new Error(
+          'GitHub pagination did not advance. Refresh to retry; incomplete activity has not been saved.',
+        )
+      cursors.add(cursor)
+      const response = await this.graphqlRequest<{
+        repository: Record<string, typeof initial> | null
+        rateLimit: GraphqlRateLimitPayload
+      }>(
+        `query RepositoryActivity($owner: String!, $name: String!, $cursor: String!) {
+          repository(owner: $owner, name: $name) {
+            ${field}(first: 100, after: $cursor, orderBy: { field: UPDATED_AT, direction: DESC }) {
+              ${field === 'issues' ? ISSUE_ACTIVITY_FIELDS : PR_ACTIVITY_FIELDS}
+            }
+          }
+          rateLimit { limit remaining resetAt cost used }
+        }`,
+        { owner, name, cursor },
+        signal,
+      )
+      this.emitRateLimitFromGraphql(response.rateLimit)
+      if (!response.repository?.[field])
+        throw new Error(
+          'GitHub activity is unavailable. Incomplete activity has not been saved.',
+        )
+      page = response.repository[field]
+    }
+    return [...records.values()]
+  }
+
   private async fetchRepositorySnapshot(
     owner: string,
     repo: string,
     signal?: AbortSignal,
+    since = threeMonthWindow(new Date().toISOString()).start,
   ): Promise<RepositorySnapshot> {
     const response = await this.graphqlRequest<RepositorySnapshotResponse>(
       REPOSITORY_SNAPSHOT_QUERY,
@@ -847,6 +929,13 @@ export class GitHubApiClient {
       })
     }
 
+    if (response.repository.isPrivate) {
+      throw new GitHubApiError({
+        message: 'repoBuzz explores public repositories only.',
+        status: 403,
+        source: 'graphql',
+      })
+    }
     const metadata = {
       name: response.repository.name,
       nameWithOwner: response.repository.nameWithOwner,
@@ -873,7 +962,25 @@ export class GitHubApiClient {
       helpWantedCount: response.repository.helpWantedIssues.totalCount,
     }
 
-    const issues: GitHubIssueNode[] = response.repository.issues.nodes.map((issue) => ({
+    const [issueNodes, prNodes] = await Promise.all([
+      this.fetchActivityPages(
+        owner,
+        repo,
+        'issues',
+        response.repository.issues,
+        since,
+        signal,
+      ),
+      this.fetchActivityPages(
+        owner,
+        repo,
+        'pullRequests',
+        response.repository.pullRequests,
+        since,
+        signal,
+      ),
+    ])
+    const issues: GitHubIssueNode[] = issueNodes.map((issue) => ({
       id: issue.id,
       createdAt: issue.createdAt,
       closedAt: issue.closedAt,
@@ -886,20 +993,19 @@ export class GitHubApiClient {
       author: normalizeActor(issue.author),
     }))
 
-    const pullRequests: GitHubPullRequestNode[] =
-      response.repository.pullRequests.nodes.map((pr) => ({
-        id: pr.id,
-        createdAt: pr.createdAt,
-        mergedAt: pr.mergedAt,
-        closedAt: pr.closedAt,
-        updatedAt: pr.updatedAt,
-        state: pr.state,
-        additions: pr.additions,
-        deletions: pr.deletions,
-        reviews: pr.reviews.totalCount,
-        authorAssociation: pr.authorAssociation,
-        author: normalizeActor(pr.author),
-      }))
+    const pullRequests: GitHubPullRequestNode[] = prNodes.map((pr) => ({
+      id: pr.id,
+      createdAt: pr.createdAt,
+      mergedAt: pr.mergedAt,
+      closedAt: pr.closedAt,
+      updatedAt: pr.updatedAt,
+      state: pr.state,
+      additions: pr.additions,
+      deletions: pr.deletions,
+      reviews: pr.reviews.totalCount,
+      authorAssociation: pr.authorAssociation,
+      author: normalizeActor(pr.author),
+    }))
 
     return {
       metadata,
@@ -911,7 +1017,8 @@ export class GitHubApiClient {
   private async fetchRepositoryStats(
     owner: string,
     repo: string,
-  signal?: AbortSignal,
+    signal?: AbortSignal,
+    window = threeMonthWindow(new Date().toISOString()),
   ): Promise<RepositoryStatsBundle> {
     const [participation, commitActivity, contributors, codeFrequency] =
       await Promise.all([
@@ -965,6 +1072,7 @@ export class GitHubApiClient {
           owner,
           repo,
           signal,
+          window,
         )
 
         if (commitActivity.unavailableReason === 'commit_limit') {
@@ -977,17 +1085,13 @@ export class GitHubApiClient {
           )
         }
 
-        const truncatedSuffix = recentCommitFallback.truncated
-          ? ` (capped at ${
-              RECENT_COMMIT_FALLBACK_PER_PAGE * RECENT_COMMIT_FALLBACK_MAX_PAGES
-            } commits)`
-          : ''
         fallbackMessages.push(
-          `GitHub stats endpoints are unavailable for repositories with 10,000+ commits. Using last ${RECENT_COMMIT_FALLBACK_DAYS} days of commit history for commit/contributor metrics${truncatedSuffix}.`,
+          'Some GitHub statistics are unavailable. Three-month commit history was fetched as a fallback; it includes merge commits and uses author dates.',
         )
-      } catch {
+      } catch (error) {
+        if (signal?.aborted) throw error
         fallbackMessages.push(
-          'GitHub stats endpoints are unavailable for this repository, and 30-day commit fallback data could not be loaded.',
+          'GitHub stats endpoints are unavailable for this repository, and three-month commit fallback data could not be loaded.',
         )
       }
     }
@@ -1088,17 +1192,15 @@ export class GitHubApiClient {
     owner: string,
     repo: string,
     signal?: AbortSignal,
+    window: AnalysisWindow = threeMonthWindow(new Date().toISOString()),
   ): Promise<RecentCommitFallback> {
-    const sinceIso = new Date(
-      Date.now() - RECENT_COMMIT_FALLBACK_DAYS * DAY_MS,
-    ).toISOString()
+    const sinceIso = window.start
     const commits: RecentCommitListItem[] = []
-    let truncated = false
 
-    for (let page = 1; page <= RECENT_COMMIT_FALLBACK_MAX_PAGES; page += 1) {
+    for (let page = 1; ; page += 1) {
       const path =
         `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits` +
-        `?since=${encodeURIComponent(sinceIso)}` +
+        `?since=${encodeURIComponent(sinceIso)}&until=${encodeURIComponent(window.end)}` +
         `&per_page=${RECENT_COMMIT_FALLBACK_PER_PAGE}` +
         `&page=${page}`
 
@@ -1114,13 +1216,10 @@ export class GitHubApiClient {
       if (pageItems.length < RECENT_COMMIT_FALLBACK_PER_PAGE) {
         break
       }
-
-      if (page === RECENT_COMMIT_FALLBACK_MAX_PAGES) {
-        truncated = true
-      }
     }
 
     const commitsByWeek = new Map<number, number>()
+    const daysByWeek = new Map<number, number[]>()
     const contributorsByKey = new Map<
       string,
       {
@@ -1136,7 +1235,15 @@ export class GitHubApiClient {
         continue
       }
 
+      if (
+        Date.parse(authoredAt) < Date.parse(window.start) ||
+        Date.parse(authoredAt) > Date.parse(window.end)
+      )
+        continue
       const weekStart = toUtcWeekStartUnixSeconds(authoredAt)
+      const days = daysByWeek.get(weekStart) ?? [0, 0, 0, 0, 0, 0, 0]
+      days[new Date(authoredAt).getUTCDay()]++
+      daysByWeek.set(weekStart, days)
       commitsByWeek.set(weekStart, (commitsByWeek.get(weekStart) ?? 0) + 1)
 
       const key = item.author?.login ?? '__unknown__'
@@ -1164,7 +1271,7 @@ export class GitHubApiClient {
       .map(([week, total]) => ({
         week,
         total,
-        days: [0, 0, 0, 0, 0, 0, 0],
+        days: daysByWeek.get(week)!,
       }))
 
     const contributors: ContributorStat[] = [...contributorsByKey.values()]
@@ -1184,7 +1291,6 @@ export class GitHubApiClient {
     return {
       commitActivity,
       contributors,
-      truncated,
     }
   }
 }
