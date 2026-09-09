@@ -99,28 +99,30 @@ export default function App() {
         Skip to content
       </a>
       <header className="topbar">
-        <a className="brand" href="#/" aria-label="repoBuzz home">
-          <span className="brand-mark">
-            b<span>↗</span>
-          </span>
-          repo<span>Buzz</span>
-          <small>THE OPEN-SOURCE FIELD GUIDE</small>
-        </a>
-        <nav aria-label="Main navigation">
-          <a className={!route ? "nav-active" : ""} href="#/">
-            Explore
+        <div className="shell-inner topbar-inner">
+          <a className="brand" href="#/" aria-label="repoBuzz home">
+            <span className="brand-mark">
+              b<span>↗</span>
+            </span>
+            repo<span>Buzz</span>
+            <small>THE OPEN-SOURCE FIELD GUIDE</small>
           </a>
-          <a className={route === "saved" ? "nav-active" : ""} href="#/saved">
-            Saved explorations
-          </a>
-          <span className="connection">
-            <i className={status.data?.configured ? "connected" : ""} />
-            Shared library · {status.data?.cachedExplorations ?? "…"}{" "}
-            explorations
-          </span>
-        </nav>
+          <nav aria-label="Main navigation">
+            <a className={!route ? "nav-active" : ""} href="#/">
+              Explore
+            </a>
+            <a className={route === "saved" ? "nav-active" : ""} href="#/saved">
+              Saved explorations
+            </a>
+            <span className="connection">
+              <i className={status.data?.configured ? "connected" : ""} />
+              Shared library · {status.data?.cachedExplorations ?? "…"}{" "}
+              explorations
+            </span>
+          </nav>
+        </div>
       </header>
-      <main id="main-content" tabIndex={-1}>
+      <main className="shell-inner" id="main-content" tabIndex={-1}>
         {!route ? (
           <>
             {
@@ -314,11 +316,13 @@ export default function App() {
         )}
       </main>
       <footer>
-        <a className="brand" href="#/">
-          repo<span>Buzz</span>
-        </a>
-        <p>Find a community. Start small. Keep showing up.</p>
-        <a href="#/demo">How to read the signals ↗</a>
+        <div className="shell-inner footer-inner">
+          <a className="brand" href="#/">
+            repo<span>Buzz</span>
+          </a>
+          <p>Find a community. Start small. Keep showing up.</p>
+          <a href="#/demo">How to read the signals ↗</a>
+        </div>
       </footer>
     </div>
   );
@@ -443,13 +447,6 @@ function ExplorePage({
         <span>{isDemo ? "Sample exploration" : route}</span>
       </div>
       <div className="page-toolbar">
-        <span className="eyebrow">
-          {isDemo
-            ? "ILLUSTRATIVE DATA · NOT A LIVE REPOSITORY"
-            : isRepo
-              ? "REPOSITORY FIELD NOTES"
-              : "ORGANIZATION FIELD NOTES"}
-        </span>
         {!isDemo && (
           <button
             className="ghost"
@@ -485,14 +482,20 @@ function ExplorePage({
         </div>
       )}
       {query.isFetching && !query.data && (
-        <div className="empty-state" role="status">
-          <div className="loading-bar" />
+        <div className="empty-state loading-state" role="status">
+          <div className="buzz-meter" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
           <h2>Listening for the buzz…</h2>
-          <p>
-            Checking the shared library, then collecting any needed GitHub
-            activity for the past three months. Busy projects can take longer.
-            GitHub may take a moment to prepare statistics.
-          </p>
+          <span className="loading-rail" aria-hidden="true" />
         </div>
       )}
       {(isRepo || isDemo) && (data?.kind === "repo" || isDemo) && (
