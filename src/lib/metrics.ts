@@ -1,5 +1,5 @@
-import { inWindow, threeMonthWindow } from './analysisWindow'
-import type { RepoAnalytics, RepositoryBundle } from '../types/github'
+import { inWindow, threeMonthWindow } from './analysisWindow.js'
+import type { RepoAnalytics, RepositoryBundle } from '../types/github.js'
 
 const DAY = 86400000
 const WEEK = 7 * DAY

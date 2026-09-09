@@ -1,4 +1,4 @@
-import type { RateLimitSnapshot, RateLimitSource } from '../types/github'
+import type { RateLimitSnapshot, RateLimitSource } from '../types/github.js'
 
 interface GitHubErrorOptions {
   message: string

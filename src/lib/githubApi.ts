@@ -1,7 +1,7 @@
-import { threeMonthWindow, type AnalysisWindow } from './analysisWindow'
+import { threeMonthWindow, type AnalysisWindow } from './analysisWindow.js'
 import pLimit from 'p-limit'
 
-import { GitHubApiError } from './githubError'
+import { GitHubApiError } from './githubError.js'
 import type {
   CommitActivityWeek,
   ContributorStat,
@@ -14,7 +14,7 @@ import type {
   RepositoryBundle,
   RepositorySnapshot,
   RepositoryStatsBundle,
-} from '../types/github'
+} from '../types/github.js'
 
 const GITHUB_API_BASE = 'https://api.github.com'
 const GITHUB_API_VERSION = '2022-11-28'

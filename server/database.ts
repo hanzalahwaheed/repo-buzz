@@ -1,10 +1,11 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { ExplorationData } from '../src/types/api'
+import type { ExplorationData } from '../src/types/api.js'
+import { SCHEMA_VERSION } from './store.js'
+import type { ExplorationStore, StoreSummary } from './store.js'
 
-const SCHEMA_VERSION = 2
-export class ExplorationDatabase {
+export class ExplorationDatabase implements ExplorationStore {
   private db: DatabaseSync
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
@@ -29,7 +30,10 @@ export class ExplorationDatabase {
       CREATE INDEX IF NOT EXISTS repositories_owner ON repositories(owner);
     `)
   }
-  get(kind: 'org' | 'repo', target: string): ExplorationData | null {
+  async get(
+    kind: 'org' | 'repo',
+    target: string,
+  ): Promise<ExplorationData | null> {
     const sql =
       kind === 'org'
         ? 'SELECT payload FROM organizations WHERE login = ? AND schema_version = ?'
@@ -37,7 +41,7 @@ export class ExplorationDatabase {
     const row = this.db.prepare(sql).get(target, SCHEMA_VERSION)
     return row ? (JSON.parse(String(row.payload)) as ExplorationData) : null
   }
-  upsert(data: ExplorationData): void {
+  async upsert(data: ExplorationData): Promise<void> {
     const payload = JSON.stringify(data)
     if (data.kind === 'org') {
       this.db
@@ -62,7 +66,7 @@ export class ExplorationDatabase {
         )
     }
   }
-  remove(kind: 'org' | 'repo', target: string): void {
+  async remove(kind: 'org' | 'repo', target: string): Promise<void> {
     this.db
       .prepare(
         kind === 'org'
@@ -71,7 +75,7 @@ export class ExplorationDatabase {
       )
       .run(target)
   }
-  summary() {
+  async summary(): Promise<StoreSummary> {
     const counts = this.db
       .prepare(
         `SELECT (SELECT COUNT(*) FROM organizations WHERE schema_version = ?) + (SELECT COUNT(*) FROM repositories WHERE schema_version = ?) AS total`,
@@ -86,14 +90,10 @@ export class ExplorationDatabase {
       .all(SCHEMA_VERSION, SCHEMA_VERSION)
     return {
       count: Number(counts?.total ?? 0),
-      recent: recent as Array<{
-        kind: 'org' | 'repo'
-        target: string
-        fetchedAt: string
-      }>,
+      recent: recent as StoreSummary['recent'],
     }
   }
-  close() {
+  async close(): Promise<void> {
     this.db.close()
   }
 }

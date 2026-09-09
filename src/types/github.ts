@@ -1,4 +1,4 @@
-import type { AnalysisWindow } from '../lib/analysisWindow'
+import type { AnalysisWindow } from '../lib/analysisWindow.js'
 export type RateLimitSource = 'rest' | 'graphql'
 
 export interface RateLimitSnapshot {

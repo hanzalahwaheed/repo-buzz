@@ -71,7 +71,7 @@ test('shared cache serves a second visitor without spending another GitHub reque
       'database',
     )
   } finally {
-    f.db.close()
+    await f.db.close()
   }
 })
 
@@ -84,11 +84,11 @@ test('organizations and repositories have separate rows; refresh updates rather 
     const updated = await f.library.explore('FIELDNOTES/GARDEN')
     assert.equal(updated.source, 'github')
     assert.notEqual(updated.data.fetchedAt, original.data.fetchedAt)
-    assert.equal(f.db.summary().count, 2)
-    assert.equal(f.db.get('org', 'FIELDNOTES').kind, 'org')
+    assert.equal((await f.db.summary()).count, 2)
+    assert.equal((await f.db.get('org', 'FIELDNOTES')).kind, 'org')
     assert.equal(f.requests(), 3)
   } finally {
-    f.db.close()
+    await f.db.close()
   }
 })
 
@@ -103,7 +103,7 @@ test('simultaneous requests for one target share the in-flight fetch', async () 
     assert.equal(f.requests(), 1)
     assert.ok(results.every((result) => result.data.id === results[0].data.id))
   } finally {
-    f.db.close()
+    await f.db.close()
   }
 })
 
@@ -123,7 +123,7 @@ test('manual refresh respects the shared cooldown and refreshes once it expires'
     )
     assert.equal(f.requests(), 2)
   } finally {
-    f.db.close()
+    await f.db.close()
   }
 })
 
@@ -139,9 +139,9 @@ test('failed refresh preserves the old row and explicitly marks it stale', async
     assert.equal(result.source, 'stale')
     assert.equal(result.data.fetchedAt, first.data.fetchedAt)
     assert.doesNotMatch(JSON.stringify(result), /a-secret-value/)
-    assert.equal(f.db.summary().count, 1)
+    assert.equal((await f.db.summary()).count, 1)
   } finally {
-    f.db.close()
+    await f.db.close()
   }
 })
 
@@ -161,9 +161,9 @@ test('private or removed repositories are evicted on revalidation instead of ser
       f.library.explore('fieldnotes/garden'),
       (error) => error.status === 404,
     )
-    assert.equal(f.db.get('repo', 'fieldnotes/garden'), null)
+    assert.equal(await f.db.get('repo', 'fieldnotes/garden'), null)
   } finally {
-    f.db.close()
+    await f.db.close()
   }
 })
 
@@ -172,10 +172,10 @@ test('missing owner token gives a useful error and does not insert a false snaps
   try {
     const library = new SharedLibrary(db)
     await assert.rejects(library.explore('fieldnotes/garden'), /site owner/)
-    assert.equal(db.summary().count, 0)
+    assert.equal((await db.summary()).count, 0)
     assert.equal((await library.status()).configured, false)
   } finally {
-    db.close()
+    await db.close()
   }
 })
 
@@ -186,17 +186,17 @@ test('SQLite rows survive closing and reopening the database', async () => {
   try {
     const f = fixture()
     const result = await f.library.explore('fieldnotes/garden')
-    f.db.close()
-    db.upsert(result.data)
-    db.close()
+    await f.db.close()
+    await db.upsert(result.data)
+    await db.close()
     db = new ExplorationDatabase(path)
     assert.equal(
-      db.get('repo', 'FIELDNOTES/GARDEN').bundle.analysisWindow.version,
+      (await db.get('repo', 'FIELDNOTES/GARDEN')).bundle.analysisWindow.version,
       2,
     )
-    assert.equal(db.summary().count, 1)
+    assert.equal((await db.summary()).count, 1)
   } finally {
-    db.close()
+    await db.close()
     rmSync(directory, { recursive: true, force: true })
   }
 })
@@ -215,7 +215,7 @@ test('upstream miss budget limits spending while cached requests still work', as
       'database',
     )
   } finally {
-    f.db.close()
+    await f.db.close()
   }
 })
 
@@ -269,6 +269,6 @@ test('HTTP API exposes only public data, protects refreshes, and never serves th
   } finally {
     server.closeAllConnections()
     await new Promise((resolve) => server.close(resolve))
-    f.db.close()
+    await f.db.close()
   }
 })

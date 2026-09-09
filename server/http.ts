@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { resolve, sep, extname } from 'node:path'
-import { LibraryError, SharedLibrary } from './library'
+import { LibraryError, SharedLibrary } from './library.js'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
