@@ -17,7 +17,15 @@ npm run dev
 
 The app runs at `http://localhost:5173`. The shared API runs at `http://127.0.0.1:3001`, proxied through Vite so browser requests stay on the app’s origin. The SQLite database is created automatically at `data/repobuzz.sqlite`.
 
-The site owner configures one fine-grained GitHub token with public repository access and no write permissions. **Visitors never provide a token.** Restart the API after changing `.env`. Without the owner token, the sample tour and existing database entries remain available; uncached requests explain that the shared connection needs configuration.
+The site owner configures one fine-grained GitHub token with public repository access and no write permissions. Restart the API after changing `.env`. Without the owner token, the sample tour and existing database entries remain available; uncached requests explain that a token is needed.
+
+### Visitor tokens
+
+A visitor may add their own fine-grained token on the settings page. The server prefers it over the shared token for that visitor's explorations, so those requests spend the visitor's quota and skip the shared refresh budget entirely. A visitor token also makes the site usable when the owner has configured no token at all.
+
+The token is kept in the visitor's browser under `repobuzz.githubToken.v1` until they remove it. It is sent to the API in an `X-GitHub-Token` header, one request at a time, and forwarded to `api.github.com`. The server never logs it, never stores it, and builds a throwaway client per request so a visitor's rate limits stay out of the shared status. Header values are accepted only as `[A-Za-z0-9_]{20,255}`, the character set GitHub issues.
+
+Visitor tokens cannot widen what the library stores. Every repository query rejects private repositories, and both organization queries are pinned to `privacy: PUBLIC`, so a visitor with broader access still cannot pull private data into the shared database.
 
 ```sh
 npm test        # analytics, pagination, real SQLite persistence, shared caching, HTTP API
@@ -87,7 +95,7 @@ Use a persistent disk/volume and back up the database with a SQLite-aware backup
 
 ## Deploy on Vercel with Neon
 
-The `api/` directory holds the same two endpoints as Vercel functions. They use the Postgres store, because a Vercel function has an ephemeral filesystem.
+The `api/` directory holds the same three endpoints as Vercel functions. They use the Postgres store, because a Vercel function has an ephemeral filesystem.
 
 ```sh
 vercel login
@@ -112,6 +120,9 @@ The server serves static files only from `dist`; `.env`, source, and database fi
 - `GET /api/status`: cache count, recent shared entries, connection availability, and cached API limits. Never returns credentials.
 - `GET /api/explorations?target=owner/repo`: read-through cached exploration (organization names also accepted).
 - `POST /api/explorations?target=owner/repo`: refresh subject to cooldown, with `Content-Type: application/json`. No request body is needed. Cross-site browser requests are rejected.
+- `POST /api/token-check`: checks the `X-GitHub-Token` header against GitHub and returns the quota it carries. No request body is needed.
+
+Both `/api/explorations` methods accept an optional `X-GitHub-Token` header. When present, it replaces the shared token for that request.
 
 ## Verification
 

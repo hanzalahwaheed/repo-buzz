@@ -4,6 +4,8 @@ interface RateLimitIndicatorProps {
   restRateLimit?: RateLimitSnapshot
   graphRateLimit?: RateLimitSnapshot
   isAuthenticated: boolean
+  title?: string
+  unauthenticatedNote?: string
 }
 
 function formatResetTime(resetAt: string): string {
@@ -64,11 +66,13 @@ export function RateLimitIndicator({
   restRateLimit,
   graphRateLimit,
   isAuthenticated,
+  title = 'Shared GitHub limits',
+  unauthenticatedNote = 'Live refresh is not available yet. Existing library entries and the sample tour remain accessible.',
 }: RateLimitIndicatorProps) {
   return (
     <section className="panel">
       <header className="panel-header">
-        <h2>Shared GitHub limits</h2>
+        <h2>{title}</h2>
       </header>
 
       <div className="rate-grid">
@@ -77,10 +81,7 @@ export function RateLimitIndicator({
       </div>
 
       {!isAuthenticated ? (
-        <p className="warning">
-          Live refresh is not available yet. Existing library entries and the
-          sample tour remain accessible.
-        </p>
+        <p className="warning">{unauthenticatedNote}</p>
       ) : null}
     </section>
   )

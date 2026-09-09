@@ -167,11 +167,109 @@ test('private or removed repositories are evicted on revalidation instead of ser
   }
 })
 
+test('a visitor token is preferred over the shared connection', async () => {
+  const f = fixture()
+  let visitorRequests = 0
+  let seenToken = ''
+  const library = new SharedLibrary(f.db, {
+    client: f.client,
+    now: f.now,
+    visitorClient: (token) => {
+      seenToken = token
+      return {
+        fetchRateLimits: async () => {},
+        fetchRepositoryBundle: async () => {
+          visitorRequests++
+          return createDemoBundle()
+        },
+        fetchOrganizationRepositoriesAll: async () => {
+          visitorRequests++
+          return []
+        },
+      }
+    },
+  })
+  try {
+    const result = await library.explore(
+      'fieldnotes/garden',
+      false,
+      'visitor-a',
+      'ghp_visitor_token_0123456789',
+    )
+    assert.equal(result.source, 'github')
+    assert.equal(seenToken, 'ghp_visitor_token_0123456789')
+    assert.equal(visitorRequests, 1)
+    // The shared connection stayed untouched.
+    assert.equal(f.requests(), 0)
+  } finally {
+    await f.db.close()
+  }
+})
+
+test('a visitor token explores even when the shared connection is missing', async () => {
+  const db = new ExplorationDatabase(':memory:')
+  try {
+    const library = new SharedLibrary(db, {
+      visitorClient: () => ({
+        fetchRateLimits: async () => {},
+        fetchRepositoryBundle: async () => createDemoBundle(),
+        fetchOrganizationRepositoriesAll: async () => [],
+      }),
+    })
+    assert.equal((await library.status()).configured, false)
+    const result = await library.explore(
+      'fieldnotes/garden',
+      false,
+      'visitor-a',
+      'ghp_visitor_token_0123456789',
+    )
+    assert.equal(result.source, 'github')
+    assert.equal((await db.summary()).count, 1)
+  } finally {
+    await db.close()
+  }
+})
+
+test('a visitor token does not spend the shared refresh budget', async () => {
+  const f = fixture()
+  const library = new SharedLibrary(f.db, {
+    client: f.client,
+    now: f.now,
+    visitorClient: () => ({
+      fetchRateLimits: async () => {},
+      fetchRepositoryBundle: async () => createDemoBundle(),
+      fetchOrganizationRepositoriesAll: async () => [],
+    }),
+  })
+  try {
+    // Exhaust this visitor's share of the shared budget.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await library.explore(`fieldnotes/repo-${attempt}`, false, 'visitor-a')
+    }
+    await assert.rejects(
+      library.explore('fieldnotes/blocked', false, 'visitor-a'),
+      /budget is resting/,
+    )
+    const own = await library.explore(
+      'fieldnotes/blocked',
+      false,
+      'visitor-a',
+      'ghp_visitor_token_0123456789',
+    )
+    assert.equal(own.source, 'github')
+  } finally {
+    await f.db.close()
+  }
+})
+
 test('missing owner token gives a useful error and does not insert a false snapshot', async () => {
   const db = new ExplorationDatabase(':memory:')
   try {
     const library = new SharedLibrary(db)
-    await assert.rejects(library.explore('fieldnotes/garden'), /site owner/)
+    await assert.rejects(
+      library.explore('fieldnotes/garden'),
+      /not available yet/,
+    )
     assert.equal((await db.summary()).count, 0)
     assert.equal((await library.status()).configured, false)
   } finally {

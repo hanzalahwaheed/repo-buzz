@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { LibraryError } from '../server/library.js'
+import { LibraryError, readVisitorToken } from '../server/library.js'
 import { fail, getLibrary, guard, json, visitorOf } from './_library.js'
 
 export default async function handler(
@@ -20,6 +20,8 @@ export default async function handler(
       (Array.isArray(target) ? target[0] : target) ?? '',
       request.method === 'POST',
       visitorOf(request),
+      // The header keeps a visitor token out of the URL and out of any log line.
+      readVisitorToken(request.headers['x-github-token']),
     )
     json(response, 200, result)
   } catch (error) {

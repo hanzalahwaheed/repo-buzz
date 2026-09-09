@@ -1544,13 +1544,83 @@ footer p,
 .recent-grid .eyebrow {
   font-size: 8px;
 }
-.settings-layout {
-  grid-template-columns: 1fr;
+.settings-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
-.settings-layout .token-panel {
-  max-width: 740px;
+.token-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+.token-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7fd4a0;
+  box-shadow: 0 0 0 3px #7fd4a033;
+  flex: none;
+}
+.token-state code {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  color: var(--text-main);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 11px;
+}
+.connection-order {
+  list-style: none;
+  counter-reset: connection;
+  margin: 0 0 18px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.connection-order li {
+  counter-increment: connection;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px 14px 12px 40px;
+}
+.connection-order li:before {
+  content: counter(connection);
+  position: absolute;
+  left: 13px;
+  top: 12px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.connection-order .chosen {
+  border-color: #a9c39a;
+  background: var(--bg-elevated);
+}
+.connection-order .chosen:before {
+  color: var(--accent);
+}
+.connection-order strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.connection-order span {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.token-panel .notice {
+  margin-top: 16px;
 }
 @media (max-width: 900px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
   .connected-overview {
     grid-template-columns: 1fr;
     gap: 18px;

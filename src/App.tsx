@@ -11,6 +11,8 @@ import { openExplorationTab } from "./lib/explorationTabs";
 import { fetchExploration, fetchLibraryStatus } from "./lib/libraryApi";
 import { OrgView } from "./components/OrgView";
 import { RateLimitIndicator } from "./components/RateLimitIndicator";
+import { SettingsPage } from "./components/SettingsPage";
+import { usePersonalToken } from "./lib/personalToken";
 const RepositoryPage = lazy(() => import("./components/RepositoryPage"));
 
 function routeTarget() {
@@ -29,6 +31,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [history, setHistory] = useState(listSearchHistory);
+  const personalToken = usePersonalToken();
   const status = useQuery({
     queryKey: ["library-status"],
     queryFn: ({ signal }) => fetchLibraryStatus(signal),
@@ -114,10 +117,20 @@ export default function App() {
             <a className={route === "saved" ? "nav-active" : ""} href="#/saved">
               Saved explorations
             </a>
+            <a
+              className={route === "settings" ? "nav-active" : ""}
+              href="#/settings"
+            >
+              Settings
+            </a>
             <span className="connection">
-              <i className={status.data?.configured ? "connected" : ""} />
-              Shared library · {status.data?.cachedExplorations ?? "…"}{" "}
-              explorations
+              <i
+                className={
+                  personalToken || status.data?.configured ? "connected" : ""
+                }
+              />
+              {personalToken ? "Your token" : "Shared library"} ·{" "}
+              {status.data?.cachedExplorations ?? "…"} explorations
             </span>
           </nav>
         </div>
@@ -311,6 +324,8 @@ export default function App() {
           </>
         ) : route === "saved" ? (
           <SavedPage onOpen={openExploration} />
+        ) : route === "settings" ? (
+          <SettingsPage status={status.data} />
         ) : (
           <ExplorePage key={route} route={route} onOpen={openExploration} />
         )}
