@@ -31,3 +31,5 @@ dist-ssr
 *.sqlite-shm
 *.sqlite-wal
 !.env.example
+.vercel
+.env*

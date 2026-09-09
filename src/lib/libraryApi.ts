@@ -1,4 +1,4 @@
-import type { LibraryStatus, SharedExploration } from '../types/api'
+import type { LibraryStatus, SharedExploration } from '../types/api.js'
 
 async function request<T>(
   path: string,

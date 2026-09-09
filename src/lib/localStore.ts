@@ -4,8 +4,8 @@ import type {
   PersistedSearchHistoryEntry,
   SearchEventSource,
   SnapshotKind,
-} from '../types/storage'
-import type { OrganizationRepoSummary, RepositoryBundle } from '../types/github'
+} from '../types/storage.js'
+import type { OrganizationRepoSummary, RepositoryBundle } from '../types/github.js'
 
 const STORAGE_KEYS = {
   repoVersions: 'repobuzz.repoVersions.v1',

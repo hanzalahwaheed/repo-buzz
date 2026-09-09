@@ -2,7 +2,7 @@ import type {
   OrganizationRepoSummary,
   RateLimitSnapshot,
   RepositoryBundle,
-} from './github'
+} from './github.js'
 
 export type ExplorationData = {
   id: string

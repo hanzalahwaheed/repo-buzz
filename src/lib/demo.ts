@@ -1,5 +1,5 @@
-import { threeMonthWindow } from './analysisWindow'
-import type { RepositoryBundle } from '../types/github'
+import { threeMonthWindow } from './analysisWindow.js'
+import type { RepositoryBundle } from '../types/github.js'
 // A deterministic fictional dataset, clearly marked in the UI. Never persisted.
 export function createDemoBundle(): RepositoryBundle {
   const now = new Date('2026-09-01T12:00:00Z').getTime()

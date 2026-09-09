@@ -1,13 +1,13 @@
 import pLimit from 'p-limit'
-import { GitHubApiClient } from '../src/lib/githubApi'
-import { GitHubApiError } from '../src/lib/githubError'
-import { parseSearchTarget } from '../src/lib/search'
+import { GitHubApiClient } from '../src/lib/githubApi.js'
+import { GitHubApiError } from '../src/lib/githubError.js'
+import { parseSearchTarget } from '../src/lib/search.js'
 import type {
   ExplorationData,
   SharedExploration,
   LibraryStatus,
-} from '../src/types/api'
-import { ExplorationDatabase } from './database'
+} from '../src/types/api.js'
+import type { ExplorationStore } from './store.js'
 
 export class LibraryError extends Error {
   status: number
@@ -43,8 +43,8 @@ export class SharedLibrary {
   private statusUpdatedAt = 0
   private statusRequest: Promise<void> | null = null
 
-  private db: ExplorationDatabase
-  constructor(db: ExplorationDatabase, options: Options = {}) {
+  private db: ExplorationStore
+  constructor(db: ExplorationStore, options: Options = {}) {
     this.db = db
     this.now = options.now ?? Date.now
     this.ttl = options.ttlMs ?? 6 * 60 * 60 * 1000
@@ -72,7 +72,7 @@ export class SharedLibrary {
       }
       await this.statusRequest
     }
-    const summary = this.db.summary()
+    const summary = await this.db.summary()
     return {
       configured: this.configured,
       cachedExplorations: summary.count,
@@ -129,7 +129,7 @@ export class SharedLibrary {
     ).toLowerCase()
     const kind = parsed.type
     const key = `${kind}:${target}`
-    const cached = this.db.get(kind, target)
+    const cached = await this.db.get(kind, target)
     if (
       cached &&
       this.now() - Date.parse(cached.fetchedAt) <
@@ -197,9 +197,9 @@ export class SharedLibrary {
               repos,
             }
           }
-          this.db.upsert(data)
+          await this.db.upsert(data)
           // Read through the same persisted representation served to every visitor.
-          return this.result(this.db.get(kind, target)!, 'github')
+          return this.result((await this.db.get(kind, target))!, 'github')
         })
       } catch (error) {
         const gone =
@@ -207,7 +207,7 @@ export class SharedLibrary {
           (error.status === 404 ||
             (error.status === 403 &&
               error.message.includes('public repositories only')))
-        if (gone) this.db.remove(kind, target)
+        if (gone) await this.db.remove(kind, target)
         const safeError =
           error instanceof LibraryError
             ? error

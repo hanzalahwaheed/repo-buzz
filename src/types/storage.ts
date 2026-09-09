@@ -1,4 +1,4 @@
-import type { OrganizationRepoSummary, RepositoryBundle } from './github'
+import type { OrganizationRepoSummary, RepositoryBundle } from './github.js'
 
 export type SnapshotKind = 'org' | 'repo'
 export type SearchEventSource = 'network' | 'storage'

@@ -38,12 +38,17 @@ npm start       # API and built frontend together, default port 3001
 
 ## Shared database and request savings
 
-`server/database.ts` owns SQLite access. It creates:
+`ExplorationStore` in `server/database.ts` is the persistence boundary. Two stores implement it:
+
+- `ExplorationDatabase` (`server/database.ts`) uses a local SQLite file. It is the default for local work and for the Docker image.
+- `PostgresExplorationDatabase` (`server/postgresDatabase.ts`) uses Neon Postgres. It is selected when `DATABASE_URL` is set.
+
+Both stores create:
 
 - `organizations`: one row per normalized GitHub login, including repository-list JSON and fetch timestamp.
 - `repositories`: one row per normalized `owner/repository`, including the complete analysis bundle and fetch timestamp, indexed by owner.
 
-Primary keys are case insensitive. Inserts use parameterized statements; later fetches **upsert the same row**, rather than append duplicate records. The payload schema version prevents incompatible cache formats from being reused. WAL mode supports concurrent reads while updates are committed.
+Primary keys are case insensitive. SQLite uses `COLLATE NOCASE`; Postgres stores the keys in lower case and compares with `lower()`. Inserts use parameterized statements; later fetches **upsert the same row**, rather than append duplicate records. The payload schema version prevents incompatible cache formats from being reused. WAL mode supports concurrent reads while updates are committed in SQLite.
 
 `server/library.ts` checks this database before GitHub:
 
@@ -78,7 +83,27 @@ docker run --env-file .env -e HOST=0.0.0.0 -e DATABASE_PATH=/data/repobuzz.sqlit
   -p 3001:3001 -v repobuzz-data:/data repobuzz
 ```
 
-Use a persistent disk/volume and back up the database with a SQLite-aware backup tool. An ephemeral filesystem loses the shared cache across restarts. This is a single-service SQLite design, not a distributed/serverless database. `ExplorationDatabase` is the narrow persistence boundary to replace with Neon/Postgres if deploying multiple API replicas later.
+Use a persistent disk/volume and back up the database with a SQLite-aware backup tool. An ephemeral filesystem loses the shared cache across restarts.
+
+## Deploy on Vercel with Neon
+
+The `api/` directory holds the same two endpoints as Vercel functions. They use the Postgres store, because a Vercel function has an ephemeral filesystem.
+
+```sh
+vercel login
+vercel link
+vercel integration add neon    # sets the connection string on the project
+vercel env add GITHUB_TOKEN    # production, preview, development
+vercel deploy --prod
+```
+
+The connection string is read from `DATABASE_URL`, or from `POSTGRES_URL` if the first is absent. The Neon integration sets both names.
+
+Relative imports in `api/`, `server/`, `src/lib/`, and `src/types/` carry an explicit `.js` extension. Vercel transpiles each function file separately instead of bundling it, and this package is an ES module, so Node needs the extension to resolve the import at runtime. Vite and `tsx` accept either form. Do not remove these extensions.
+
+The store creates its tables on first use, so no migration step is needed. To run the same setup locally, put the connection string in `.env` and start the server as usual; `npm run dev` then uses Neon instead of SQLite.
+
+Note one behavior change. The in-memory protections in `server/library.ts` — the hourly request budget, the failure back-off, and in-flight deduplication — are per instance. One Node server shares them across all visitors. Vercel runs several instances, so each instance keeps its own budget and the effective global limit rises with instance count. The shared database cache still works across all instances, which is what saves most GitHub requests.
 
 The server serves static files only from `dist`; `.env`, source, and database files are not exposed. Visitors cannot upload arbitrary snapshots or supply a GitHub token to the API. Public data is shared across users; no private repositories are intentionally cached. A previously public repository can remain cached until revalidation discovers an access change.
 
