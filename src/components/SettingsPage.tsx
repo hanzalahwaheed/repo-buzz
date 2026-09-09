@@ -88,7 +88,7 @@ export function SettingsPage({ status }: SettingsPageProps) {
       </div>
       <p className="subtle">
         repoBuzz explores public repositories with a shared GitHub connection.
-        Add your own token to explore on your own quota instead.
+        Nothing here is required.
       </p>
       <div className="settings-layout">
         <section className="panel token-panel">
@@ -96,6 +96,12 @@ export function SettingsPage({ status }: SettingsPageProps) {
             {token ? 'YOUR TOKEN IS IN USE' : 'OPTIONAL'}
           </p>
           <h2>Personal access token</h2>
+          {!token && (
+            <p>
+              The shared connection covers ordinary use. Add a token only if you
+              hit its limits, or if you would rather explore on your own quota.
+            </p>
+          )}
           {token ? (
             <>
               <p className="token-state">
@@ -109,7 +115,7 @@ export function SettingsPage({ status }: SettingsPageProps) {
               </p>
             </>
           ) : (
-            <p>
+            <p className="subtle">
               Use a fine-grained token with public repository access and a short
               expiration. No write permissions are needed.
             </p>

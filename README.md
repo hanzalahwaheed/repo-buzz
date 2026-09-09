@@ -21,7 +21,9 @@ The site owner configures one fine-grained GitHub token with public repository a
 
 ### Visitor tokens
 
-A visitor may add their own fine-grained token on the settings page. The server prefers it over the shared token for that visitor's explorations, so those requests spend the visitor's quota and skip the shared refresh budget entirely. A visitor token also makes the site usable when the owner has configured no token at all.
+The shared token covers ordinary use, and nothing asks a visitor for one. When the shared connection is spent, the error carries `ownTokenHelps` and only then does the app offer the settings page.
+
+A visitor may add their own fine-grained token there. The server prefers it over the shared token for that visitor's explorations, so those requests spend the visitor's quota and skip the shared refresh budget entirely. A visitor token also makes the site usable when the owner has configured no token at all.
 
 The token is kept in the visitor's browser under `repobuzz.githubToken.v1` until they remove it. It is sent to the API in an `X-GitHub-Token` header, one request at a time, and forwarded to `api.github.com`. The server never logs it, never stores it, and builds a throwaway client per request so a visitor's rate limits stay out of the shared status. Header values are accepted only as `[A-Za-z0-9_]{20,255}`, the character set GitHub issues.
 

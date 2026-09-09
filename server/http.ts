@@ -93,6 +93,9 @@ export function createHandler(
             error instanceof LibraryError
               ? error.message
               : 'The shared library is temporarily unavailable.',
+          ...(error instanceof LibraryError && error.ownTokenHelps
+            ? { ownTokenHelps: true }
+            : {}),
         })
     }
   }

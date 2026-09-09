@@ -1544,6 +1544,29 @@ footer p,
 .recent-grid .eyebrow {
   font-size: 8px;
 }
+.token-offer {
+  border: 1px solid #cedba3;
+  border-radius: 12px;
+  background: linear-gradient(160deg, #f4f7e6, var(--bg-surface));
+  padding: 24px 26px;
+  margin: 18px 0 6px;
+  max-width: 620px;
+}
+.token-offer h2 {
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-size: 25px;
+  font-weight: 400;
+  margin: 8px 0 10px;
+}
+.token-offer p:not(.eyebrow) {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0 0 18px;
+}
+.token-offer .button-link {
+  font-size: 13px;
+  padding: 10px 16px;
+}
 .settings-side {
   display: flex;
   flex-direction: column;

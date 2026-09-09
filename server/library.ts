@@ -12,10 +12,25 @@ import type { ExplorationStore } from './store.js'
 
 export class LibraryError extends Error {
   status: number
-  constructor(message: string, status: number) {
+  /** True when the shared connection is spent and a visitor's own token would work. */
+  ownTokenHelps: boolean
+  constructor(message: string, status: number, ownTokenHelps = false) {
     super(message)
     this.status = status
+    this.ownTokenHelps = ownTokenHelps
   }
+}
+
+/** GitHub reports an exhausted quota as a 429, or a 403 with nothing remaining. */
+function isRateLimited(error: unknown): boolean {
+  return (
+    error instanceof GitHubApiError &&
+    (error.status === 429 ||
+      (error.status === 403 &&
+        (error.rateLimit?.remaining === 0 ||
+          error.retryAfterSeconds !== undefined ||
+          error.message.toLowerCase().includes('rate limit'))))
+  )
 }
 /**
  * Reads a visitor-supplied token from a request header.
@@ -130,6 +145,7 @@ export class SharedLibrary {
       throw new LibraryError(
         'The shared refresh budget is resting. Try again later; saved explorations remain available.',
         429,
+        true,
       )
     }
     if (this.limit.pendingCount >= 6)
@@ -193,6 +209,15 @@ export class SharedLibrary {
         (error.status === 403 &&
           error.message.includes('public repositories only')))
     if (gone) await this.db.remove(kind, target)
+    if (!gone && isRateLimited(error))
+      return {
+        gone,
+        safeError: new LibraryError(
+          'The shared GitHub connection has no requests left for now.',
+          429,
+          true,
+        ),
+      }
     const safeError =
       error instanceof LibraryError
         ? error
@@ -276,8 +301,9 @@ export class SharedLibrary {
       try {
         if (!this.configured)
           throw new LibraryError(
-            'Live exploration is not available yet. Add your own GitHub token in settings, or try an existing exploration or the sample tour.',
+            'Live exploration is not available right now. Saved explorations and the sample tour remain available.',
             503,
+            true,
           )
         this.checkBudget(visitor)
         return await this.collect(kind, target, key, this.client)
@@ -320,11 +346,7 @@ export class SharedLibrary {
           'GitHub rejected your token. Check it in settings, or remove it to use the shared connection.',
           401,
         )
-      if (
-        error instanceof GitHubApiError &&
-        (error.status === 429 ||
-          (error.status === 403 && error.message.includes('rate limit')))
-      )
+      if (isRateLimited(error))
         throw new LibraryError(
           'Your GitHub token has no requests left for now. Wait for its quota to reset, or remove it in settings to use the shared connection.',
           429,

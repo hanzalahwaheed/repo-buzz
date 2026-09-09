@@ -8,7 +8,11 @@ import {
   clearAllPersistedData,
 } from "./lib/localStore";
 import { openExplorationTab } from "./lib/explorationTabs";
-import { fetchExploration, fetchLibraryStatus } from "./lib/libraryApi";
+import {
+  fetchExploration,
+  fetchLibraryStatus,
+  LibraryRequestError,
+} from "./lib/libraryApi";
 import { OrgView } from "./components/OrgView";
 import { RateLimitIndicator } from "./components/RateLimitIndicator";
 import { SettingsPage } from "./components/SettingsPage";
@@ -422,6 +426,7 @@ function ExplorePage({
   const target = parseSearchTarget(route);
   const isRepo = target?.type === "repo";
   const isDemo = route === "demo";
+  const personalToken = usePersonalToken();
   const [showForks, setShowForks] = useState(false);
   const refreshRequested = useRef(false);
   const queryClient = useQueryClient();
@@ -496,6 +501,22 @@ function ExplorePage({
           <a href="#/demo">Try the sample tour</a>
         </div>
       )}
+      {query.error instanceof LibraryRequestError &&
+        query.error.ownTokenHelps &&
+        !personalToken && (
+          <aside className="token-offer">
+            <p className="eyebrow">THE SHARED CONNECTION IS SPENT</p>
+            <h2>Keep exploring on your own quota</h2>
+            <p>
+              Add a GitHub token and repoBuzz will use it instead of the shared
+              connection. A fine-grained token with public repository access is
+              enough, and you can remove it at any time.
+            </p>
+            <a className="button-link" href="#/settings">
+              Add your token ↗
+            </a>
+          </aside>
+        )}
       {query.isFetching && !query.data && (
         <div className="empty-state loading-state" role="status">
           <div className="buzz-meter" aria-hidden="true">

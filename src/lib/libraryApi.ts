@@ -12,6 +12,18 @@ interface RequestOptions {
   token?: string
 }
 
+/** Carries the server's hint that the visitor's own token would get past this. */
+export class LibraryRequestError extends Error {
+  status: number
+  ownTokenHelps: boolean
+  constructor(message: string, status: number, ownTokenHelps: boolean) {
+    super(message)
+    this.name = 'LibraryRequestError'
+    this.status = status
+    this.ownTokenHelps = ownTokenHelps
+  }
+}
+
 async function request<T>(
   path: string,
   { signal, refresh = false, token }: RequestOptions = {},
@@ -27,9 +39,11 @@ async function request<T>(
   })
   const payload = await response.json().catch(() => null)
   if (!response.ok || !payload)
-    throw new Error(
+    throw new LibraryRequestError(
       payload?.error ??
         'The shared library is unavailable. Please try again shortly.',
+      response.status,
+      Boolean(payload?.ownTokenHelps),
     )
   return payload as T
 }

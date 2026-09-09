@@ -248,7 +248,11 @@ test('a visitor token does not spend the shared refresh budget', async () => {
     }
     await assert.rejects(
       library.explore('fieldnotes/blocked', false, 'visitor-a'),
-      /budget is resting/,
+      (error) => {
+        assert.match(error.message, /budget is resting/)
+        assert.equal(error.ownTokenHelps, true)
+        return true
+      },
     )
     const own = await library.explore(
       'fieldnotes/blocked',
@@ -262,14 +266,76 @@ test('a visitor token does not spend the shared refresh budget', async () => {
   }
 })
 
+test('a rate-limited shared token reads as depletion, not a generic failure', async () => {
+  const db = new ExplorationDatabase(':memory:')
+  try {
+    const library = new SharedLibrary(db, {
+      client: {
+        fetchRateLimits: async () => {},
+        fetchOrganizationRepositoriesAll: async () => [],
+        fetchRepositoryBundle: async () => {
+          throw new GitHubApiError({
+            message: 'API rate limit exceeded',
+            status: 403,
+            source: 'rest',
+            rateLimit: {
+              source: 'rest',
+              limit: 5000,
+              remaining: 0,
+              resetAt: new Date().toISOString(),
+            },
+          })
+        },
+      },
+    })
+    await assert.rejects(library.explore('fieldnotes/garden'), (error) => {
+      assert.equal(error.status, 429)
+      assert.match(error.message, /no requests left/)
+      assert.equal(error.ownTokenHelps, true)
+      return true
+    })
+    assert.equal((await db.summary()).count, 0)
+  } finally {
+    await db.close()
+  }
+})
+
+test('a target that is simply missing does not offer a visitor token', async () => {
+  const db = new ExplorationDatabase(':memory:')
+  try {
+    const library = new SharedLibrary(db, {
+      client: {
+        fetchRateLimits: async () => {},
+        fetchOrganizationRepositoriesAll: async () => [],
+        fetchRepositoryBundle: async () => {
+          throw new GitHubApiError({
+            message: 'Not Found',
+            status: 404,
+            source: 'graphql',
+          })
+        },
+      },
+    })
+    await assert.rejects(library.explore('fieldnotes/garden'), (error) => {
+      assert.equal(error.status, 404)
+      assert.equal(error.ownTokenHelps, false)
+      return true
+    })
+  } finally {
+    await db.close()
+  }
+})
+
 test('missing owner token gives a useful error and does not insert a false snapshot', async () => {
   const db = new ExplorationDatabase(':memory:')
   try {
     const library = new SharedLibrary(db)
-    await assert.rejects(
-      library.explore('fieldnotes/garden'),
-      /not available yet/,
-    )
+    await assert.rejects(library.explore('fieldnotes/garden'), (error) => {
+      assert.match(error.message, /not available right now/)
+      // The UI offers a visitor token only when this flag is set.
+      assert.equal(error.ownTokenHelps, true)
+      return true
+    })
     assert.equal((await db.summary()).count, 0)
     assert.equal((await library.status()).configured, false)
   } finally {
