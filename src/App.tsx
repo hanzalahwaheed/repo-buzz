@@ -8,9 +8,15 @@ import {
   clearAllPersistedData,
 } from "./lib/localStore";
 import { openExplorationTab } from "./lib/explorationTabs";
-import { fetchExploration, fetchLibraryStatus } from "./lib/libraryApi";
+import {
+  fetchExploration,
+  fetchLibraryStatus,
+  LibraryRequestError,
+} from "./lib/libraryApi";
 import { OrgView } from "./components/OrgView";
 import { RateLimitIndicator } from "./components/RateLimitIndicator";
+import { SettingsPage } from "./components/SettingsPage";
+import { usePersonalToken } from "./lib/personalToken";
 const RepositoryPage = lazy(() => import("./components/RepositoryPage"));
 
 function routeTarget() {
@@ -29,6 +35,7 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [history, setHistory] = useState(listSearchHistory);
+  const personalToken = usePersonalToken();
   const status = useQuery({
     queryKey: ["library-status"],
     queryFn: ({ signal }) => fetchLibraryStatus(signal),
@@ -99,28 +106,40 @@ export default function App() {
         Skip to content
       </a>
       <header className="topbar">
-        <a className="brand" href="#/" aria-label="repoBuzz home">
-          <span className="brand-mark">
-            b<span>↗</span>
-          </span>
-          repo<span>Buzz</span>
-          <small>THE OPEN-SOURCE FIELD GUIDE</small>
-        </a>
-        <nav aria-label="Main navigation">
-          <a className={!route ? "nav-active" : ""} href="#/">
-            Explore
+        <div className="shell-inner topbar-inner">
+          <a className="brand" href="#/" aria-label="repoBuzz home">
+            <span className="brand-mark">
+              b<span>↗</span>
+            </span>
+            repo<span>Buzz</span>
+            <small>THE OPEN-SOURCE FIELD GUIDE</small>
           </a>
-          <a className={route === "saved" ? "nav-active" : ""} href="#/saved">
-            Saved explorations
-          </a>
-          <span className="connection">
-            <i className={status.data?.configured ? "connected" : ""} />
-            Shared library · {status.data?.cachedExplorations ?? "…"}{" "}
-            explorations
-          </span>
-        </nav>
+          <nav aria-label="Main navigation">
+            <a className={!route ? "nav-active" : ""} href="#/">
+              Explore
+            </a>
+            <a className={route === "saved" ? "nav-active" : ""} href="#/saved">
+              Saved explorations
+            </a>
+            <a
+              className={route === "settings" ? "nav-active" : ""}
+              href="#/settings"
+            >
+              Settings
+            </a>
+            <span className="connection">
+              <i
+                className={
+                  personalToken || status.data?.configured ? "connected" : ""
+                }
+              />
+              {personalToken ? "Your token" : "Shared library"} ·{" "}
+              {status.data?.cachedExplorations ?? "…"} explorations
+            </span>
+          </nav>
+        </div>
       </header>
-      <main id="main-content" tabIndex={-1}>
+      <main className="shell-inner" id="main-content" tabIndex={-1}>
         {!route ? (
           <>
             {
@@ -309,16 +328,20 @@ export default function App() {
           </>
         ) : route === "saved" ? (
           <SavedPage onOpen={openExploration} />
+        ) : route === "settings" ? (
+          <SettingsPage status={status.data} />
         ) : (
           <ExplorePage key={route} route={route} onOpen={openExploration} />
         )}
       </main>
       <footer>
-        <a className="brand" href="#/">
-          repo<span>Buzz</span>
-        </a>
-        <p>Find a community. Start small. Keep showing up.</p>
-        <a href="#/demo">How to read the signals ↗</a>
+        <div className="shell-inner footer-inner">
+          <a className="brand" href="#/">
+            repo<span>Buzz</span>
+          </a>
+          <p>Find a community. Start small. Keep showing up.</p>
+          <a href="#/demo">How to read the signals ↗</a>
+        </div>
       </footer>
     </div>
   );
@@ -403,6 +426,7 @@ function ExplorePage({
   const target = parseSearchTarget(route);
   const isRepo = target?.type === "repo";
   const isDemo = route === "demo";
+  const personalToken = usePersonalToken();
   const [showForks, setShowForks] = useState(false);
   const refreshRequested = useRef(false);
   const queryClient = useQueryClient();
@@ -443,13 +467,6 @@ function ExplorePage({
         <span>{isDemo ? "Sample exploration" : route}</span>
       </div>
       <div className="page-toolbar">
-        <span className="eyebrow">
-          {isDemo
-            ? "ILLUSTRATIVE DATA · NOT A LIVE REPOSITORY"
-            : isRepo
-              ? "REPOSITORY FIELD NOTES"
-              : "ORGANIZATION FIELD NOTES"}
-        </span>
         {!isDemo && (
           <button
             className="ghost"
@@ -484,15 +501,37 @@ function ExplorePage({
           <a href="#/demo">Try the sample tour</a>
         </div>
       )}
+      {query.error instanceof LibraryRequestError &&
+        query.error.ownTokenHelps &&
+        !personalToken && (
+          <aside className="token-offer">
+            <p className="eyebrow">THE SHARED CONNECTION IS SPENT</p>
+            <h2>Keep exploring on your own quota</h2>
+            <p>
+              Add a GitHub token and repoBuzz will use it instead of the shared
+              connection. A fine-grained token with public repository access is
+              enough, and you can remove it at any time.
+            </p>
+            <a className="button-link" href="#/settings">
+              Add your token ↗
+            </a>
+          </aside>
+        )}
       {query.isFetching && !query.data && (
-        <div className="empty-state" role="status">
-          <div className="loading-bar" />
+        <div className="empty-state loading-state" role="status">
+          <div className="buzz-meter" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
           <h2>Listening for the buzz…</h2>
-          <p>
-            Checking the shared library, then collecting any needed GitHub
-            activity for the past three months. Busy projects can take longer.
-            GitHub may take a moment to prepare statistics.
-          </p>
+          <span className="loading-rail" aria-hidden="true" />
         </div>
       )}
       {(isRepo || isDemo) && (data?.kind === "repo" || isDemo) && (

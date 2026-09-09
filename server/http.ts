@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { resolve, sep, extname } from 'node:path'
-import { LibraryError, SharedLibrary } from './library.js'
+import { LibraryError, readVisitorToken, SharedLibrary } from './library.js'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -29,8 +29,15 @@ export function createHandler(
       if (url.pathname.startsWith('/api/')) {
         if (request.headers['sec-fetch-site'] === 'cross-site')
           throw new LibraryError('Cross-site requests are not supported.', 403)
+        // The header keeps a visitor token out of the URL and out of any log line.
+        const visitorToken = readVisitorToken(request.headers['x-github-token'])
         if (url.pathname === '/api/status' && request.method === 'GET')
           return json(response, 200, await library.status())
+        if (url.pathname === '/api/token-check' && request.method === 'POST') {
+          if (!visitorToken)
+            throw new LibraryError('Send a token to check.', 400)
+          return json(response, 200, await library.verifyToken(visitorToken))
+        }
         if (
           url.pathname === '/api/explorations' &&
           ['GET', 'POST'].includes(request.method ?? '')
@@ -44,6 +51,7 @@ export function createHandler(
             url.searchParams.get('target') ?? '',
             request.method === 'POST',
             request.socket.remoteAddress ?? 'unknown',
+            visitorToken,
           )
           return json(response, 200, result)
         }
@@ -85,6 +93,9 @@ export function createHandler(
             error instanceof LibraryError
               ? error.message
               : 'The shared library is temporarily unavailable.',
+          ...(error instanceof LibraryError && error.ownTokenHelps
+            ? { ownTokenHelps: true }
+            : {}),
         })
     }
   }

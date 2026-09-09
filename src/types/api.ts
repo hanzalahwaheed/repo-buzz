@@ -21,6 +21,12 @@ export interface SharedExploration {
   warning?: string
 }
 
+/** The result of checking a visitor-supplied token against GitHub. */
+export interface TokenCheck {
+  ok: boolean
+  rates: { rest?: RateLimitSnapshot; graphql?: RateLimitSnapshot }
+}
+
 export interface LibraryStatus {
   configured: boolean
   cachedExplorations: number

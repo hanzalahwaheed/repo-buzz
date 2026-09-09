@@ -60,5 +60,8 @@ export function fail(response: VercelResponse, error: unknown) {
       error instanceof LibraryError
         ? error.message
         : 'The shared library is temporarily unavailable.',
+    ...(error instanceof LibraryError && error.ownTokenHelps
+      ? { ownTokenHelps: true }
+      : {}),
   })
 }
